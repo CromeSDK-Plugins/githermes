@@ -7,16 +7,16 @@ import * as plugin from '../desktop/plugin.js'
 
 const selected = () => [['octocat/Hello-World', 42], ['github/sdk', 42], ['OCTOCAT/Hello-World', 27], ['github/sdk', 26]].reduce((d, [repo, number]) => plugin.updateGlobalIssueQueue(d, { type: 'toggle', item: { repo, number, title: `Issue ${number}`, state: 'OPEN' } }), plugin.emptyGlobalIssueQueue())
 const options = (draft, values) => plugin.updateGlobalIssueQueue(draft, { type: 'options', options: values })
-const defaults = { model: '', reasoning: '', fast: '', profile: '', strategy: 'squash', autoMerge: false, onError: 'stop', repositoryExecution: 'sequential', refinementAllowed: false, blockOnIssue: true }
+const defaults = { model: '', reasoning: '', fast: '', profile: '', strategy: 'squash', autoMerge: false, repositoryExecution: 'sequential', refinementAllowed: false, blockOnIssue: true }
 
 test('new Goal options have safe defaults and migrate old global and per-repo drafts without consent', () => {
  assert.deepEqual(plugin.emptyGlobalIssueQueue().options, defaults)
- const draft = selected(), old = { ...draft, options: { profile: 'worker', strategy: 'rebase', autoMerge: true, onError: 'skip' } }, before = JSON.stringify(old)
+ const draft = selected(), old = { ...draft, options: { profile: 'worker', strategy: 'rebase', autoMerge: true } }, before = JSON.stringify(old)
  const restored = plugin.restoreGlobalIssueQueue(old)
  assert.deepEqual(restored.items, draft.items)
- assert.deepEqual(restored.options, { ...defaults, profile: 'worker', strategy: 'rebase', onError: 'skip' })
+ assert.deepEqual(restored.options, { ...defaults, profile: 'worker', strategy: 'rebase' })
  assert.equal(JSON.stringify(old), before)
- assert.match(plugin.buildQueueGoalPlan(old).prompt, /Refinement nicht erlaubt/)
+ assert.match(plugin.buildQueueGoalPlan(old).prompt, /Issue-Body nicht verändern/)
  const legacy = { 'github/sdk': plugin.updateIssueQueue(plugin.emptyIssueQueue('github/sdk'), { type: 'toggle', item: { number: 42, title: 'Old issue', state: 'OPEN' } }) }
  assert.deepEqual(plugin.restoreGlobalIssueQueue(null, legacy).options, defaults)
  assert.deepEqual(plugin.updateGlobalIssueQueue(options(draft, { refinementAllowed: true, autoMerge: true }), { type: 'clear' }).options, defaults)
@@ -40,41 +40,28 @@ test('invalid enum and boolean options fail at edit, restore and executable-plan
  assert.equal(JSON.stringify(draft), before)
 })
 
-test('interleaved equal-number repos retain global order or ordered independent worker lanes', () => {
- const draft = selected(), sequential = plugin.buildQueueGoalPlan(draft), parallel = plugin.buildQueueGoalPlan(options(draft, { repositoryExecution: 'parallel' }))
- assert.match(sequential.prompt, /globalen Auswahlreihenfolge, jeweils ein Issue zur Zeit/)
- assert.ok(!sequential.prompt.includes('Repo-Worker 1'))
- assert.deepEqual(parallel.items, sequential.items)
- assert.deepEqual(parallel.prompt.split('\n').filter(s => /^\d+\./.test(s)), sequential.prompt.split('\n').filter(s => /^\d+\./.test(s)))
- assert.match(parallel.prompt, /Repo-Worker 1 \(octocat\/Hello-World\): octocat\/Hello-World#42 → OCTOCAT\/Hello-World#27/)
- assert.match(parallel.prompt, /Repo-Worker 2 \(github\/sdk\): github\/sdk#42 → github\/sdk#26/)
- assert.match(parallel.prompt, /innerhalb jedes Repositories immer sequenziell/)
- assert.match(parallel.prompt, /repoübergreifende Voraussetzungen, Abhängigkeiten und gekoppelte Änderungen prüfen/)
- assert.match(parallel.prompt, /separat verifizierten Checkout oder isolierten Worktree/)
- assert.ok(!parallel.prompt.includes('strikt in der angegebenen globalen Auswahlreihenfolge'))
- assert.equal(parallel.cwd, undefined)
- assert.match(parallel.prompt, /keine garantierte Parallelplanung/)
+test('global order is retained and parallelism is confined to independent repositories', () => {
+ const draft=selected(), sequential=plugin.buildQueueGoalPlan(draft), parallel=plugin.buildQueueGoalPlan(options(draft,{repositoryExecution:'parallel'}))
+ assert.deepEqual(parallel.items,sequential.items)
+ assert.deepEqual(parallel.prompt.split('\n').filter(s=>/^\d+\./.test(s)),sequential.prompt.split('\n').filter(s=>/^\d+\./.test(s)))
+ assert.match(sequential.prompt,/nacheinander in globaler Auswahlreihenfolge/)
+ assert.match(parallel.prompt,/Unabhängige Repositories dürfen parallel/)
+ assert.match(parallel.prompt,/getrennten Checkouts\/Worktrees/)
+ assert.match(parallel.prompt,/innerhalb jedes Repositories Auswahlreihenfolge/)
+ assert.match(parallel.prompt,/Abhängigkeiten vorab prüfen/)
+ assert.equal(parallel.cwd,undefined)
 })
 
-test('all 32 policy combinations preserve refinement permissions, blocker scope and merge gates', () => {
- for (const repositoryExecution of ['sequential', 'parallel']) for (const refinementAllowed of [false, true]) for (const blockOnIssue of [false, true]) for (const autoMerge of [false, true]) for (const onError of ['stop', 'skip']) {
-  const prompt = plugin.buildQueueGoalPlan(options(selected(), { repositoryExecution, refinementAllowed, blockOnIssue, autoMerge, onError })).prompt
-  assert.match(prompt, refinementAllowed ? /Refinement erlaubt:/ : /Refinement nicht erlaubt:/)
-  if (refinementAllowed) {
-   for (const text of ['ohne fachliche Scope-Ausweitung', 'Alle anderen Inhalte erhalten', 'vollständigen aktuellen Body erneut lesen', 'konkurrierende Änderungen nicht überschreiben', 'exakten Issue-Body zurücklesen und prüfen', 'keine Sicherheits-, Review- oder Freigabegates abschwächen']) assert.ok(prompt.includes(text), text)
-  } else assert.match(prompt, /keine Issue-Body-Schreibzugriffe/)
-  assert.match(prompt, blockOnIssue ? /das gesamte Goal mit allen Repo-Workern pausieren/ : /die betroffene Repo-Queue pausieren/)
-  if (!blockOnIssue) {
-   assert.match(prompt, /Kein späteres Issue desselben Repos beginnen/)
-   assert.match(prompt, /Nur unabhängige andere Repo-Queues dürfen im parallelen Modus weiterarbeiten/)
-   assert.match(prompt, /im sequenziellen Modus bleibt die globale Auswahlreihenfolge verbindlich/)
-  }
-  assert.match(prompt, autoMerge ? /tatsächlich grünen erforderlichen Checks am aktuellen PR-Head/ : /Nicht mergen und kein Auto-Merge aktivieren/)
-  assert.match(prompt, autoMerge ? /Alle übrigen Profilregeln, erforderliche unabhängige Reviews/ : /Bestehende Profilregeln und Merge-Freigaben bleiben gültig/)
-  assert.match(prompt, onError === 'skip' ? /nicht blockierenden Bearbeitungsfehler/ : /Diese Fehlerregel gilt unabhängig von Block on issue/)
-  if (onError === 'skip') assert.match(prompt, /weiterhin fehlgeschlagene erforderliche Checks nach erfolgloser zulässiger Reparatur und tatsächlich ausstehende erforderliche Reviews\/Erlaubnisse sind Blocker, keine überspringbaren Fehler/)
-  assert.match(prompt, /keine neuen Aufgaben ohne ausgewähltes Issue außerhalb des genehmigten Umfangs/i)
-  assert.match(prompt, /keine GitHub-Assignees nach lokalen Profilnamen ändern/)
+test('all workflow combinations retain refinement, blocker scope and merge boundaries', () => {
+ for(const repositoryExecution of ['sequential','parallel']) for(const refinementAllowed of [false,true]) for(const blockOnIssue of [false,true]) for(const autoMerge of [false,true]) {
+  const prompt=plugin.buildQueueGoalPlan(options(selected(),{repositoryExecution,refinementAllowed,blockOnIssue,autoMerge})).prompt
+  assert.match(prompt,refinementAllowed?/Issue-Klärung erlaubt/:/Issue-Body nicht verändern/)
+  if(refinementAllowed) for(const text of ['aktuellen Body lesen','konkurrierende Änderungen erhalten','Ergebnis zurücklesen','ohne den fachlichen Umfang zu erweitern']) assert.ok(prompt.includes(text),text)
+  assert.match(prompt,blockOnIssue?/echten Blocker die Queue pausieren/:/echten Blocker nur das betroffene Repository pausieren/)
+  if(!blockOnIssue) for(const text of ['im parallelen Modus','Im sequenziellen Modus','Keine abhängigen oder späteren Issues']) assert.ok(prompt.includes(text),text)
+  assert.match(prompt,autoMerge?/Merge ist für die ausgewählten Issues vorab erlaubt/:/Nicht mergen und kein Auto-Merge aktivieren/)
+  assert.match(prompt,/keine Sammel-PRs oder zusätzlichen Aufgaben/)
+  assert.match(prompt,/Keine GitHub-Assignees nach lokalen Profilnamen ändern/)
  }
 })
 
@@ -82,7 +69,7 @@ test('real disk reload preserves explicit new preferences, resets merge consent 
  const root = fileURLToPath(new URL('../../../artifacts/githermes-goal-prompt-options/', import.meta.url))
  mkdirSync(root, { recursive: true }); const dir = mkdtempSync(join(root, 'storage-'))
  try {
-  const file = join(dir, 'storage.json'), draft = options(selected(), { repositoryExecution: 'parallel', refinementAllowed: true, blockOnIssue: false, autoMerge: true, onError: 'skip' })
+  const file = join(dir, 'storage.json'), draft = options(selected(), { repositoryExecution: 'parallel', refinementAllowed: true, blockOnIssue: false, autoMerge: true })
   const storage = { set: (key, value) => writeFileSync(file, JSON.stringify({ [key]: value })) }
   plugin.persistGlobalIssueQueue(storage, draft)
   const cold = await import(`../desktop/plugin.js?options-cold=${Date.now()}`)
@@ -112,7 +99,7 @@ function transportFixture() {
 }
 
 test('every option change alters the durable fingerprint and submits exactly the preview plan', async () => {
- const base = selected(), plans = [base, ...[{ repositoryExecution: 'parallel' }, { refinementAllowed: true }, { blockOnIssue: false }, { autoMerge: true }, { onError: 'skip' }].map(values => options(base, values))].map(draft => ({ draft, plan: plugin.buildQueueGoalPlan(draft) }))
+ const base = selected(), plans = [base, ...[{ repositoryExecution: 'parallel' }, { refinementAllowed: true }, { blockOnIssue: false }, { autoMerge: true }].map(values => options(base, values))].map(draft => ({ draft, plan: plugin.buildQueueGoalPlan(draft) }))
  assert.equal(new Set(plans.map(({ plan }) => JSON.stringify(plan))).size, plans.length)
  const f = transportFixture()
  for (const { draft, plan } of plans) {

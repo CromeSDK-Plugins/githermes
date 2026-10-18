@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/CromeSDK-Plugins/githermes/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/CromeSDK-Plugins/githermes/actions/workflows/ci.yml)
 
-GitHermes **0.6.6** — [CromeSDK-Plugins/githermes](https://github.com/CromeSDK-Plugins/githermes).
+GitHermes **0.7.0** — [CromeSDK-Plugins/githermes](https://github.com/CromeSDK-Plugins/githermes).
 
 GitHub PRs & Issues as a right workspace pane in [Hermes Desktop](https://hermes-agent.nousresearch.com/docs/user-guide/desktop).
 
@@ -92,7 +92,7 @@ without Git Bash is therefore **not supported** by this plugin.
 
 ### Command and handoff recovery
 
-GitHermes 0.6.6 sends issue, comment and PR-body JSON through stdin. This avoids
+GitHermes 0.7.0 sends issue, comment and PR-body JSON through stdin. This avoids
 Windows command-length limits and native `gh.exe` misreading POSIX temporary
 paths when Hermes disables MSYS path conversion. Check lists use the same
 chunked output transport, including failing and pending check exit codes.
@@ -116,7 +116,7 @@ Generated work instructions use the executing backend's actual tools, shell
 and checkout. Exact-head reviews use the GitHub Reviews API with `commit_id`.
 A billing or spending limit that prevents a CI job from starting is reported
 separately while other checks continue; it never authorizes bypassing a required
-check. Queue Stop/Skip settings keep their existing meaning and defaults.
+check. New queues recover ordinary tool, patch, build and test failures autonomously. Existing native Goals retain their original instructions until explicitly changed in their own session.
 
 ### Repository access
 
@@ -272,24 +272,18 @@ real checks, and a separate PR with a `Closes owner/repo#N` reference per issue.
   Parallel mode groups independent repository workers in first-seen repo order,
   preserving issue order within each repo. Workers must check cross-repo
   prerequisites and use separately verified checkouts or isolated worktrees.
-- **Refinement erlaubt** defaults to off: no issue-body writes; ask about unclear
-  requirements. Opt-in permits only acceptance-criteria/subtask clarification in
-  the issue body, without expanding scope or weakening gates. Preserve other
-  content, re-read before editing and verify the exact body after writing.
-- **Block on issue** defaults to on: an unresolvable obstacle, unclear criteria
-  or genuinely outstanding required review/permission pauses the entire Goal.
-  Off pauses the affected repo queue; only independent repos in parallel mode
-  may continue. Later issues in the blocked repo and sequential global order
-  cannot bypass the blocker. Obtain independent reviews and wait for checks;
-  ask the user only for a concrete blocker that cannot be resolved autonomously.
-- **Bei Fehlern** remains separate: Stop is the queue's pause-on-error contract,
-  including reparable unexpected errors; stop before further edits/retests,
-  preserve evidence and limit diagnosis to reads. An intentionally failing
-  reproduction regression is not an unexpected error. Without a current
-  pause-on-error contract, diagnose reparable test/build/tool/CI failures,
-  repair within scope and retest first. Skip permits only transparent skipping
-  of non-blocking errors, never bypassing required checks or reviews. Explicit
-  current pause-on-error instructions take precedence.
+- **Anforderungen im Issue präzisieren** permits acceptance-criteria and subtask
+  clarification without expanding scope. Preserve other content, re-read the
+  current body before editing and verify the result. It defaults to off.
+- **Bei nicht lösbaren Hindernissen die ganze Queue pausieren** controls only
+  genuine blockers. When off, independent repositories may continue in parallel;
+  blocked repositories and their dependent work remain paused.
+- Ordinary patch, tool, build and test errors are repaired autonomously. The
+  separate Stop/Skip error selector is removed. Failed edits trigger inspection
+  of the actual diff and file contents, preservation of successful partial edits,
+  and smaller targeted corrections. Repeated attempts must use new evidence.
+  Permissions, security restrictions and required checks are never bypassed.
+
 - **Auto-merge defaults to off**; explicit opt-in is advance personal merge
   permission for the selected queue, recorded once rather than requested again
   per PR. Only the coordinating parent may merge, not delegated workers. Other
@@ -304,8 +298,11 @@ missing decision. After consent, generic “approval missing” is insufficient:
 show a new scope/security decision, revoked consent or an actually unmet
 required review/protection rule. Unknown native gates remain blocked.
 
-Older drafts keep their items and existing options and receive the safe new
-defaults, with no accidental refinement permission. Explicit new preferences
+Older drafts keep their selected items and workflow/model preferences. The obsolete
+Stop/Skip field is discarded; no new refinement or merge permission is granted.
+Previously started native Goals and their receipts are not rewritten. A paused
+old Goal needs an explicit instruction in its existing session to replace its
+old pause-on-error rule before continuing. Explicit new preferences
 persist across reloads. Metadata is untrusted JSON data, with line separators
 escaped so titles cannot inject native completion-contract fields.
 A known matching cwd is supplied only for a single-repository queue; cross-repo
@@ -370,7 +367,7 @@ permission only for the selected PRs; do not ask again per PR. Independent
 reviews, branch protection, native security gates and all other profile rules
 remain required. Only the coordinating parent may merge. The same evidence-backed
 blocker and repair-before-skip contract applies within the selected action and
-conflict policy; Stop still pauses before repair/retest. Review does not grant
+conflict policy; ordinary tool errors are repaired without a new approval. Review does not grant
 merge or code/branch-change permission.
 
 The PR start shares the issue submission state machine but uses separate

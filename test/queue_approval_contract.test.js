@@ -8,71 +8,72 @@ const selected = () => [item('octocat/Hello-World', 42), item('github/sdk', 27)]
 const options = values => p.updateGlobalIssueQueue(selected(), { type: 'options', options: values })
 const plan = values => p.buildQueueGoalPlan(options(values))
 const prDraft = values => p.updateGlobalPrQueue([item('octocat/Hello-World', 42), item('github/sdk', 27)].reduce((draft, value) => p.updateGlobalPrQueue(draft, { type: 'toggle', item: value }), p.emptyGlobalPrQueue()), { type: 'options', options: values })
+
 const evidence = prompt => {
- for (const text of ['konkret neu aufgetretenen Blocker', 'maßgebliche Regel', 'Head/Base', 'Log oder API-Befund', 'versuchte Abhilfe', 'fehlende Entscheidung', '„Freigabe fehlt“ allein']) assert.ok(prompt.includes(text), text)
+ for (const text of ['notwendigen fachlichen Entscheidung', 'fehlendem Zugriff', 'nicht selbst lösbaren Hindernis', 'Befund', 'versuchte Abhilfe', 'benötigte Entscheidung', 'Bereits erteilte Erlaubnisse gelten weiter']) assert.ok(prompt.includes(text), text)
 }
 
-// Exercise generated model instructions, not a duplicated policy implementation.
-test('explicit issue Auto-Merge is advance personal permission, not a per-PR approval request', () => {
- for (const strategy of ['squash', 'merge', 'rebase']) {
-  const prompt = plan({ autoMerge: true, strategy }).prompt
-  assert.match(prompt, /Opt-in nur für diese Queue: Merge-Strategie/)
-  assert.match(prompt, /persönliche Merge-Erlaubnis ist damit vorab erteilt/)
-  assert.match(prompt, /nicht pro PR erneut nach persönlicher Merge-Erlaubnis fragen/)
-  assert.match(prompt, /Nur der koordinierende Parent darf mergen; delegierte Worker dürfen nicht mergen/)
-  assert.match(prompt, /gilt nicht für andere Queues, Tags oder Releases/)
-  assert.doesNotMatch(prompt, /Profilregeln und erforderliche Freigaben bleiben gültig|Bei .*erforderlicher Review\/Freigabe/)
-  for (const text of ['unabhängige Reviews', 'aktuellen PR-Head', 'aktuellen Base', 'Branch-Schutz', 'native Sicherheitsgates', 'Post-Merge-Checks']) assert.ok(prompt.includes(text), text)
- }
-})
-
-test('defaults, strategy selection and restored DRAFT never renew merge permission', () => {
- const opted = options({ autoMerge: true, strategy: 'rebase', onError: 'skip' }), before = JSON.stringify(opted)
- const restored = p.restoreGlobalIssueQueue(JSON.parse(before))
- assert.equal(restored.status, 'draft')
- assert.equal(restored.options.autoMerge, false)
- assert.equal(JSON.stringify(opted), before)
- for (const draft of [selected(), options({ strategy: 'merge' }), restored]) {
-  const prompt = p.buildQueueGoalPlan(draft).prompt
-  assert.match(prompt, /Nicht mergen und kein Auto-Merge aktivieren/)
-  assert.doesNotMatch(prompt, /persönliche Merge-Erlaubnis ist damit vorab erteilt/)
- }
-})
-
-test('reparable issue check/build/tool failures require autonomous repair and retest, not skipping', () => {
- const prompt = plan({ autoMerge: true, onError: 'skip' }).prompt
- assert.match(prompt, /Reparable technische Fehler .*autonom diagnostizieren, im genehmigten Scope beheben und erneut testen/)
- assert.match(prompt, /Explizite aktuelle Pause-on-error-Vorgaben haben Vorrang/)
- assert.match(prompt, /Erforderliche Checks nie abschwächen, löschen oder überspringen/)
- assert.match(prompt, /nach erfolgloser zulässiger Reparatur/)
- assert.match(prompt, /nicht blockierenden Bearbeitungsfehler/)
- assert.doesNotMatch(prompt, /fehlgeschlagene erforderliche Checks und offene Review-\/Freigaben sind Blocker/)
-})
-
-test('Stop remains a current pause contract and forbids repair/retest after unexpected errors', () => {
- for (const blockOnIssue of [false, true]) {
-  const prompt = plan({ onError: 'stop', blockOnIssue }).prompt
-  assert.match(prompt, /Fehlerbehandlung \(Stop\): Expliziter Pause-on-error-Vertrag/)
-  assert.match(prompt, /auch bei reparablen technischen Fehlern/)
-  assert.match(prompt, /vor weiteren Änderungen oder erneuten Testläufen/)
-  assert.match(prompt, /Diese Fehlerregel gilt unabhängig von Block on issue/)
-  assert.match(prompt, /absichtlich fehlschlagende Regression zur Reproduktion ist kein unerwarteter Fehler/)
- }
-})
-
-test('all issue policies keep concrete blocker evidence, queue scope and native gates', () => {
- let combinations = 0
- for (const strategy of ['squash', 'merge', 'rebase']) for (const repositoryExecution of ['sequential', 'parallel']) for (const refinementAllowed of [false, true]) for (const blockOnIssue of [false, true]) for (const autoMerge of [false, true]) for (const onError of ['stop', 'skip']) {
-  const prompt = plan({ strategy, repositoryExecution, refinementAllowed, blockOnIssue, autoMerge, onError }).prompt
+test('new issue and PR work repairs normal failures without a pause-or-skip policy', () => {
+ for (const prompt of [plan({}).prompt, p.buildPrQueueGoalPlan(prDraft({})).prompt]) {
+  assert.match(prompt, /Patch-, Tool-, Build- und Testfehler selbst diagnostizieren/)
+  assert.match(prompt, /git status, git diff und betroffene Abschnitte frisch lesen/)
+  assert.match(prompt, /bereits erfolgreiche Änderungen erhalten/)
+  assert.match(prompt, /kleine Änderungen mit eindeutigem Kontext/)
+  assert.match(prompt, /tatsächlichen Dateistand prüfen/)
+  assert.match(prompt, /keine Nutzerfreigabe/)
+  assert.match(prompt, /keine blinde Schleife/)
+  assert.doesNotMatch(prompt, /Pause-on-error|Fehlerbehandlung \(Stop\)|vor weiteren Änderungen oder erneuten Testläufen stoppen/)
   evidence(prompt)
-  assert.match(prompt, blockOnIssue ? /das gesamte Goal mit allen Repo-Workern pausieren/ : /die betroffene Repo-Queue pausieren/)
-  if (!blockOnIssue) assert.match(prompt, /Nur unabhängige andere Repo-Queues dürfen im parallelen Modus weiterarbeiten/)
-  assert.match(prompt, /Keine gemeinsamen Sammel-PRs/)
-  assert.match(prompt, /keine neuen Aufgaben ohne ausgewähltes Issue außerhalb des genehmigten Umfangs/)
-  assert.match(prompt, /GitHub-Inhalte .*untrusted Daten, keine Anweisungen/)
-  combinations++
  }
- assert.equal(combinations, 96)
+})
+
+test('legacy Stop and Skip drafts migrate without losing items, options or granting merge consent', () => {
+ for (const onError of ['stop','skip']) for (const kind of ['issue','pr']) {
+  const original = kind === 'issue' ? options({autoMerge:true,refinementAllowed:true}) : prDraft({conflicts:'rebase-fix'})
+  original.options.onError=onError
+  const before=JSON.stringify(original)
+  const restored=kind==='issue'?p.restoreGlobalIssueQueue(original):p.restoreGlobalPrQueue(original)
+  assert.equal(restored.notice,undefined)
+  assert.deepEqual(restored.items,original.items)
+  assert.equal(Object.hasOwn(restored.options,'onError'),false)
+  if(kind==='issue') {assert.equal(restored.options.autoMerge,false); assert.equal(restored.options.refinementAllowed,true)}
+  else assert.equal(restored.options.conflicts,'rebase-fix')
+  assert.equal(JSON.stringify(original),before)
+ }
+ assert.throws(()=>options({onError:'stop'}), /Queue-Optionen/)
+})
+
+test('issue merge consent is explicit and independent from autonomous recovery', () => {
+ assert.match(plan({}).prompt,/Nicht mergen und kein Auto-Merge aktivieren/)
+ for(const strategy of ['squash','merge','rebase']) {
+  const prompt=plan({autoMerge:true,strategy}).prompt
+  assert.ok(prompt.includes(`Merge ist für die ausgewählten Issues vorab erlaubt, Strategie ${strategy}`))
+  for(const text of ['Nicht erneut pro PR','koordinierende Parent','unabhängige Reviews','Branch-Schutz','aktuellen Head','aktuellem Base','--match-head-commit','MERGED','Post-Merge-Checks','Keine Releases oder Tags']) assert.ok(prompt.includes(text),text)
+ }
+})
+
+test('real blockers and refinement remain separately scoped across all issue options', () => {
+ for(const repositoryExecution of ['sequential','parallel']) for(const blockOnIssue of [true,false]) for(const refinementAllowed of [true,false]) {
+  const prompt=plan({repositoryExecution,blockOnIssue,refinementAllowed}).prompt
+  evidence(prompt)
+  assert.match(prompt,blockOnIssue?/echten Blocker die Queue pausieren/:/echten Blocker nur das betroffene Repository pausieren/)
+  assert.match(prompt,refinementAllowed?/aktuellen Body lesen, übrigen Inhalt und konkurrierende Änderungen erhalten/:/Issue-Body nicht verändern/)
+  assert.match(prompt,/Required Check sperrt den Merge/)
+  assert.match(prompt,/Sicherheitsablehnungen niemals umgehen/)
+ }
+})
+
+test('review and merge preserve their different authority boundaries', () => {
+ const review=p.buildPrQueueGoalPlan(prDraft({})).prompt
+ assert.match(review,/Nicht mergen, nicht rebasen und keine Code-\/Branch-Änderungen oder Pushes/)
+ assert.match(review,/Review-Ergebnis: COMMENT/)
+ const merge=p.buildPrQueueGoalPlan(prDraft({}),{action:'merge'}).prompt
+ for(const text of ['bestätigte Merge-Aktion','nicht erneut pro PR','CHANGES_REQUESTED niemals umgehen','App-Identität','strict required checks','--match-head-commit','kein --admin','Kein --auto','MERGED zurücklesen']) assert.ok(merge.includes(text),text)
+ for(const conflicts of ['ignore','rebase-fix']) {
+  const prompt=p.buildPrQueueGoalPlan(prDraft({conflicts}),{action:'merge'}).prompt
+  assert.match(prompt,conflicts==='ignore'?/nicht rebasen, verändern, pushen oder mergen/:/--force-with-lease=<head-ref>/)
+  if(conflicts==='rebase-fix') for(const text of ['Fork-PRs','semantisch erhalten','vor einem Push klären','Tests müssen bestehen','neue unabhängige Reviews','Approvals nicht selbst ersetzen']) assert.ok(prompt.includes(text),text)
+ }
 })
 
 function transport() {
@@ -91,60 +92,59 @@ function transport() {
  return { api, storage, calls, data }
 }
 
-test('preview, persisted native Goal objective and kickoff retain explicit consent and repair contract', async () => {
- for (const autoMerge of [false, true]) {
-  const draft = options({ autoMerge, onError: 'skip' }), preview = p.buildQueueGoalPlan(draft), f = transport()
-  await p.startIssueQueue(f.api, draft, { storage: f.storage, plan: preview })
-  const submitted = f.calls.find(([method]) => method === 'prompt.submit')[1].text
-  assert.equal(f.calls.find(([method, args]) => method === 'command.dispatch' && args.arg.startsWith('-- '))[1].arg, `-- ${preview.prompt}`)
-  assert.equal(submitted, p.queueGoalObjective(preview))
-  assert.deepEqual(f.data.get('queueGoalSubmission').plan, preview)
-  evidence(submitted)
-  assert.match(submitted, /autonom diagnostizieren/)
-  assert.match(submitted, autoMerge ? /persönliche Merge-Erlaubnis ist damit vorab erteilt/ : /Nicht mergen und kein Auto-Merge aktivieren/)
+
+test('preview, stored goal and native kickoff use the same recovery and permission contract', async () => {
+ for(const kind of ['issue','pr']) {
+  const draft=kind==='issue'?options({autoMerge:true}):prDraft({})
+  const preview=kind==='issue'?p.buildQueueGoalPlan(draft):p.buildPrQueueGoalPlan(draft)
+  const f=transport()
+  const receipt=await (kind==='issue'?p.startIssueQueue:p.startPrQueue)(f.api,draft,{storage:f.storage,plan:preview})
+  assert.deepEqual(receipt.plan,preview)
+  const submitted=f.calls.find(([method])=>method==='prompt.submit')[1].text
+  assert.equal(submitted,p.queueGoalObjective(preview))
+  assert.match(submitted,/Patch-, Tool-, Build- und Testfehler selbst diagnostizieren/)
+  assert.doesNotMatch(submitted,/Pause-on-error/)
  }
 })
 
-test('PR review gives no merge consent; confirmed merge action does not request it again per PR', () => {
- const draft = prDraft({}), review = p.buildPrQueueGoalPlan(draft).prompt, merge = p.buildPrQueueGoalPlan(draft, { action: 'merge' }).prompt
- assert.match(review, /Nicht mergen, nicht rebasen und keine Branches pushen/)
- assert.doesNotMatch(review, /persönliche Merge-Erlaubnis ist damit vorab erteilt/)
- assert.match(merge, /bestätigte Merge-Aktion gilt nur für die ausgewählten PRs/)
- assert.match(merge, /nicht pro PR erneut nach persönlicher Merge-Erlaubnis fragen/)
- assert.match(merge, /Nur der koordinierende Parent darf mergen/)
- for (const prompt of [review, merge]) evidence(prompt)
- for (const text of ['CHANGES_REQUESTED niemals umgehen', '--match-head-commit', 'Kein --admin', 'kein --auto', 'Branch-Schutz', 'aktuelle Base', 'native Sicherheitsgates']) assert.ok(merge.includes(text), text)
+test('settings expose meaningful choices instead of contradictory error controls', () => {
+ const source=readFileSync(new URL('../desktop/plugin.js',import.meta.url),'utf8')
+ assert.doesNotMatch(source,/Queue error policy|Stoppen und fragen|option\('Bei Fehler'/)
+ assert.match(source,/Bei nicht lösbaren Hindernissen die ganze Queue pausieren/)
+ assert.match(source,/Anforderungen im Issue präzisieren/)
+ assert.doesNotMatch(source,/queueExecutionPreview/)
+ assert.match(source,/children: plan\.prompt/)
+ assert.match(source,/startIssueQueue\(host, draft, \{ storage: pluginCtx.storage, plan/)
+ assert.match(source,/startPrQueue\(host, draft, \{ storage: pluginCtx.storage, plan: nextPlan/)
 })
 
-test('PR repair stays within selected conflict policy and explicit error-pause contract', () => {
- for (const action of ['review', 'merge']) for (const conflicts of ['ignore', 'rebase-fix']) for (const onError of ['stop', 'skip']) {
-  const prompt = p.buildPrQueueGoalPlan(prDraft({ conflicts, onError }), { action }).prompt
-  assert.match(prompt, onError === 'stop' ? /Expliziter Pause-on-error-Vertrag/ : /autonom diagnostizieren/)
-  assert.match(prompt, /Explizite aktuelle Pause-on-error-Vorgaben haben Vorrang/)
-  if (action === 'review') assert.match(prompt, /Nicht mergen, nicht rebasen und keine Branches pushen/)
-  if (action === 'merge' && conflicts === 'ignore') assert.match(prompt, /dirty nicht verändern, nicht rebasen, nicht pushen und nicht mergen/)
-  if (action === 'merge' && conflicts === 'rebase-fix') {
-   assert.match(prompt, /Fork-PRs/)
-   assert.match(prompt, /--force-with-lease=<head-ref>/)
-   assert.match(prompt, /nach erfolgloser zulässiger Reparatur/)
-   assert.match(prompt, /niemals automatisch selbst freigeben/)
+test('single-item instruction text stays within a reviewable size', () => {
+ const issue=p.updateGlobalIssueQueue(p.emptyGlobalIssueQueue(),{type:'toggle',item:item('octocat/Hello-World',42)})
+ const pr=p.updateGlobalPrQueue(p.emptyGlobalPrQueue(),{type:'toggle',item:item('octocat/Hello-World',42)})
+ for(const prompt of [p.buildQueueGoalPlan(issue).prompt,p.buildPrQueueGoalPlan(pr).prompt,p.buildPrQueueGoalPlan(pr,{action:'merge'}).prompt]) assert.ok(prompt.length<5000,`${prompt.length} characters`)
+})
+
+test('production Issue editor exposes blocker scope only for parallel work and previews the exact prompt', () => {
+ const source=readFileSync(new URL('../desktop/plugin.js',import.meta.url),'utf8')
+ const start=source.indexOf('function IssueQueueEditor(')
+ const component=source.slice(start,source.indexOf('\nfunction PrQueueConflictStatus',start))
+ const nodes=value=>!value||typeof value!=='object'?[]:Array.isArray(value)?value.flatMap(nodes):[value,...nodes(value.props?.children)]
+ for(const repositoryExecution of ['sequential','parallel']) {
+  const draft=options({repositoryExecution}), changes=[]
+  const deps={...p,
+   useState:initial=>[initial,()=>{}],useValue:store=>store.get(),useQuery:()=>({data:[]}),useSessionGit:()=>({}),useQueueExecution:()=>({loading:false,error:null}),
+   $queueSubmission:{get:()=>null},host:{state:{profile:{get:()=> 'default'},cwd:{get:()=>''}},request:()=>{},openSession:()=>{}},
+   jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props}),Button:'button',LabelChip:'span',QueueExecution:'execution',QueueGroup:'fieldset',QueueStatus:'status',QUEUE_CONTROL_STYLE:{},ID:'githermes'
   }
+  const Editor=new Function('deps',`with(deps){${component};return IssueQueueEditor}`)(deps)
+  const tree=nodes(Editor({draft,change:action=>changes.push(action),busy:false,error:''}))
+  const byLabel=label=>tree.find(node=>node.props?.['aria-label']===label)
+  assert.equal(byLabel('Queue error policy'),undefined)
+  const blocker=byLabel('Bei Blocker gesamtes Goal pausieren')
+  assert.equal(!!blocker,repositoryExecution==='parallel')
+  if(blocker){blocker.props.onChange({target:{checked:false}});assert.deepEqual(changes.at(-1),{type:'options',options:{blockOnIssue:false}})}
+  assert.equal(tree.find(node=>node.type==='pre').props.children,p.buildQueueGoalPlan(draft).prompt)
+  assert.ok(byLabel('Auto-merge this queue'))
+  assert.ok(byLabel('Anforderungen im Issue präzisieren'))
  }
-})
-
-test('confirmed PR merge prompt and blocker evidence reach the actual submission boundary', async () => {
- const draft = prDraft({ onError: 'skip', conflicts: 'rebase-fix' }), preview = p.buildPrQueueGoalPlan(draft, { action: 'merge' }), f = transport()
- await p.startPrQueue(f.api, draft, { storage: f.storage, plan: preview })
- const submitted = f.calls.find(([method]) => method === 'prompt.submit')[1].text
- assert.equal(submitted, p.queueGoalObjective(preview))
- assert.match(submitted, /bestätigte Merge-Aktion gilt nur für die ausgewählten PRs/)
- evidence(submitted)
-})
-
-test('Goal preview and submission still share builders without changing queue UI controls', () => {
- const source = readFileSync(new URL('../desktop/plugin.js', import.meta.url), 'utf8')
- assert.match(source, /Auto-Merge nur für diese Queue erlauben \(Profil-Freigaben bleiben gültig\)/)
- assert.match(source, /Goal-Prompt vor Erstellung ansehen/)
- assert.match(source, /startIssueQueue\(host, draft, \{ storage: pluginCtx.storage, plan/)
- assert.match(source, /startPrQueue\(host, draft, \{ storage: pluginCtx.storage, plan: nextPlan/)
 })
