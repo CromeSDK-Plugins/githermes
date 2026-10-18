@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/CromeSDK-Plugins/githermes/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/CromeSDK-Plugins/githermes/actions/workflows/ci.yml)
 
-GitHermes **0.6.0** — [CromeSDK-Plugins/githermes](https://github.com/CromeSDK-Plugins/githermes).
+GitHermes **0.6.1** — [CromeSDK-Plugins/githermes](https://github.com/CromeSDK-Plugins/githermes).
 
 GitHub PRs & Issues as a right workspace pane in [Hermes Desktop](https://hermes-agent.nousresearch.com/docs/user-guide/desktop).
 
@@ -43,7 +43,7 @@ A single-file desktop plugin (`@hermes/plugin-sdk`) that shows your repository's
 - Hermes Desktop 0.21.7 or newer (audited SDK floor; see verification limits below)
 - [`gh`](https://cli.github.com/) installed and authenticated (`gh auth status`)
 - **Fix failing checks:** Python 3.8+ available as `python3` or `python` on the connected host, for secret-safe log collection.
-- **Windows:** [Git for Windows](https://gitforwindows.org/) (Git Bash and its POSIX tools), plus `gh` on the PATH inherited by Hermes. WSL's `C:\Windows\System32\bash.exe` is not a substitute.
+- **Windows:** [Git for Windows](https://gitforwindows.org/) (Git Bash and its POSIX tools) when `shell.exec` itself runs under Windows `cmd.exe`, plus `gh` on the PATH inherited by that gateway. A Windows Desktop with a Linux gateway shell runs commands in that `sh` and does not look for Git Bash. WSL's `C:\Windows\System32\bash.exe` is not a substitute.
 
 ### Windows shell setup and recovery
 
@@ -52,7 +52,7 @@ commit `41cd7b649d0980`. Automated transport tests ran on Windows 11 through
 real `cmd.exe` → Git Bash; this is **not** a live Desktop-tested minimum.
 Linux/macOS Desktop loading and interactions remain unverified.
 
-GitHermes checks every `where git` result (including portable Git),
+Git Bash discovery runs only after `shell.exec` expands `%OS%` the way `cmd.exe` does. A POSIX shell that leaves the probe token unexpanded is used directly. Otherwise GitHermes checks every `where git` result (including portable Git),
 `%ProgramFiles%\Git\bin\bash.exe` / `usr\bin\bash.exe`,
 `%ProgramFiles(x86)%\Git\bin\bash.exe`,
 `%LOCALAPPDATA%\Programs\Git\bin\bash.exe` / `usr\bin\bash.exe`,

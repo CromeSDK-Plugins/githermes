@@ -729,7 +729,9 @@ const TRUNK = new Set(['main', 'master', 'dev', 'develop', 'trunk'])
 // inherit the user's login PATH (Homebrew, /usr/local). Windows runs
 // shell.exec through cmd.exe, where a leading `PATH=... cmd` assignment is
 // parsed as a VARIABLE NAMES command and the binary never runs — it exits 0
-// with empty stdout. Detect the shell and only prefix where it is valid.
+// with empty stdout. This flag is the Desktop client (navigator), not the
+// gateway shell — a Windows renderer can still exec on a Linux backend.
+// The prefix stays client-gated; resolveBash decides Git Bash vs that shell.
 const POSIX_SHELL = typeof navigator === 'undefined' || !/win/i.test(navigator.platform || navigator.userAgent || '')
 const POSIX_PATH = 'PATH=/opt/homebrew/bin:/usr/local/bin:$PATH '
 const GH = `${POSIX_SHELL ? POSIX_PATH : ''}gh`
@@ -1868,14 +1870,27 @@ function sendCommentToChat(c) {
 // go through a file, never `base64 -d | bash`: the gateway's approval detector
 // blocks that shape as command obfuscation, and it flags `rm /tmp/x` as a root-path
 // delete, which is why the cleanup uses `unlink`.
+//
+// POSIX_SHELL above is the Desktop client. @hermes/plugin-sdk host.state has no
+// OS/platform atom, ctx.os is that same client, and shell.exec returns only
+// {stdout, stderr, code} from Python shell=True on the gateway host (cmd.exe
+// on Windows, /bin/sh on Linux). Before the cmd.exe Git Bash search, ask that
+// shell to expand %OS%. cmd.exe prints GITHERMES_SHELL_Windows_NT; /bin/sh
+// prints GITHERMES_SHELL_%OS% and must run the command itself.
 let bashPath = null
 let bashReady = null
+let backendPosix = false
 
 /** Share in-flight discovery and cache success only; a failed query can Retry. */
 function resolveBash() {
-  if (POSIX_SHELL || bashPath) return Promise.resolve()
+  if (POSIX_SHELL || backendPosix || bashPath) return Promise.resolve()
   if (bashReady) return bashReady
   bashReady = (async () => {
+    const identified = await host.request('shell.exec', { command: 'echo GITHERMES_SHELL_%OS%' })
+    if (identified.code === 0 && String(identified.stdout || '').trim() === 'GITHERMES_SHELL_%OS%') {
+      backendPosix = true
+      return
+    }
     const lines = r => r.code === 0 ? (r.stdout || '').split('\n').map(s => s.trim()).filter(Boolean) : []
     const candidates = []
     const add = value => {
@@ -1914,7 +1929,7 @@ function resolveBash() {
 
 async function shellCommand(cmd) {
   await resolveBash()
-  if (POSIX_SHELL) return cmd
+  if (POSIX_SHELL || backendPosix) return cmd
   // Only base64 crosses cmd.exe (see the block comment above). Inside bash the
   // command is decoded into a $$-unique /tmp script, so concurrent shell.exec
   // calls share no file state, and `-l` is what makes `gh` resolve from the

@@ -27,6 +27,7 @@ test('shell: every shell.exec goes through the shellCommand wrapper', () => {
   for (const call of calls) {
     const ok =
       call.includes('shellCommand(') ||
+      call.includes('GITHERMES_SHELL_%OS%') ||
       call.includes("'where git'") ||
       call.includes("'where bash'") ||
       call.includes('for %G in') ||
