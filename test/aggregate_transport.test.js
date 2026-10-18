@@ -22,7 +22,7 @@ test('combined GraphQL input/partial-error envelope crosses the real Windows she
   const b64=command.match(/echo ([A-Za-z0-9+/=]+) \| tr/)
   if(b64){const decoded=relocateShellArtifacts(Buffer.from(b64[1],'base64').toString(),posix);command=relocateShellArtifacts(command.replace(b64[1],Buffer.from(decoded).toString('base64')),posix)}
   else command=relocateShellArtifacts(command,posix)
-  const job=execP(command,{shell:process.platform==='win32'?process.env.ComSpec:'/bin/bash',maxBuffer:2**20}).catch(e=>e);pending.push(job)
+  const job=execP(command,{shell:process.platform==='win32'?process.env.ComSpec:'/bin/bash',maxBuffer:2**20,env:{...process.env,TMPDIR:posix}}).catch(e=>e);pending.push(job)
   const r=await job;if(r instanceof Error&&typeof r.code!=='number')throw r
   if((r.stdout||'').length===3800)reads++
   return {code:typeof r.code==='number'?r.code:0,stdout:(r.stdout||'').slice(-4000),stderr:r.stderr||''}

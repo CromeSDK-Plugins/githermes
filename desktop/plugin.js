@@ -1959,10 +1959,25 @@ function utf8ToB64(text) {
   return btoa(bin)
 }
 
+// Directory shared by several shell.exec calls. mktemp -d is mode 700 and honors
+// TMPDIR. Empty IFS and set -f keep a spaced TMPDIR as one argument; this command
+// has no inner double quotes. finally unlinks the known files, then rmdirs.
+async function tempDir(prefix) {
+  if (!/^[a-z0-9.]+$/.test(prefix)) throw new Error('invalid temp prefix')
+  const dir = await sh('set -f; IFS=; d=$(mktemp -d ${TMPDIR:-/tmp}/' + prefix + '.XXXXXX) || exit 1; chmod 700 $d || exit 1; printf %s $d')
+  if (!dir || /[\0\r\n]/.test(dir)) throw new Error('temp directory creation failed')
+  return dir
+}
+
+async function removeTempDir(dir, names) {
+  const unlinks = names.map(name => `unlink ${sq(`${dir}/${name}`)} 2>/dev/null`).join('; ')
+  await sh(`${unlinks}; rmdir ${sq(dir)}`).catch(() => {})
+}
+
 async function postIssueComment(repo, number, text) {
-  const tag = `ghprs.cmt.${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
-  const file = `/tmp/${tag}`
-  const b64 = `/tmp/${tag}.b64`
+  const dir = await tempDir('ghprs.cmt')
+  const file = `${dir}/body`
+  const b64 = `${dir}/body.b64`
   try {
     const encoded = utf8ToB64(text)
     await sh(`: > ${sq(b64)}`)
@@ -1972,7 +1987,7 @@ async function postIssueComment(repo, number, text) {
     await sh(`{ base64 -d < ${sq(b64)} || base64 -D < ${sq(b64)}; } > ${sq(file)}`)
     await sh(`${GH} api ${sq(`repos/${repoApiPath(repo)}/issues/${number}/comments`)} --method POST -F ${sq(`body=@${file}`)} --silent`)
   } finally {
-    sh(`unlink ${sq(file)}; unlink ${sq(b64)}`).catch(() => {})
+    await removeTempDir(dir, ['body', 'body.b64'])
   }
 }
 
@@ -2079,8 +2094,8 @@ export function hexToUtf8(hex) {
 }
 
 async function shBig(cmd) {
-  const tag = `ghprs.${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
-  const raw = `/tmp/${tag}.raw`, hex = `/tmp/${tag}.hex`
+  const dir = await tempDir('ghprs')
+  const raw = `${dir}/payload.raw`, hex = `${dir}/payload.hex`
   try {
     // od -An -v -tx1 is POSIX: BSD od on macOS, coreutils od in Git for Windows' bash.
     // -v keeps repeated lines (od collapses them to `*` otherwise).
@@ -2092,7 +2107,7 @@ async function shBig(cmd) {
     )
     return hexToUtf8(out)
   } finally {
-    sh(`unlink ${sq(raw)}; unlink ${sq(hex)}`).catch(() => {})
+    await removeTempDir(dir, ['payload.raw', 'payload.hex'])
   }
 }
 
@@ -2464,15 +2479,15 @@ export async function collectFailingChecks(repo, number, { mode = 'logs', run = 
   if (!repoOk(repo) || !Number.isSafeInteger(Number(number)) || Number(number) < 1 || !['logs', 'metadata'].includes(mode)) throw new Error('Ungültiger PR')
   // Upload only collector CODE, never raw logs. Python receives gh output in
   // memory and redacts before shBig creates any remote carrier/hex file.
-  const tag = `/tmp/ghfix.${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
-  const script = `${tag}.py`, encoded = `${tag}.b64`
+  const dir = await tempDir('ghfix')
+  const script = `${dir}/collector.py`, encoded = `${dir}/collector.b64`
   try {
     const payload = utf8ToB64(FIX_CHECK_COLLECTOR)
     await sh(`: > ${sq(encoded)}`)
     for (let i = 0; i < payload.length; i += 1800) await sh(`printf %s ${sq(payload.slice(i, i + 1800))} >> ${sq(encoded)}`)
     await sh(`{ base64 -d < ${sq(encoded)} || base64 -D < ${sq(encoded)}; } > ${sq(script)}`)
     return await run(`pybin=''; for candidate in python3 python; do if "$candidate" -c 'import sys; assert sys.version_info >= (3, 8)' >/dev/null 2>&1; then pybin="$candidate"; break; fi; done; if [ -z "$pybin" ]; then printf %s 'Python 3.8+ is required for secret-safe check collection' >&2; exit 1; fi; script_arg=${sq(script)}; if command -v cygpath >/dev/null 2>&1; then script_arg=$(cygpath -w ${sq(script)}); fi; "$pybin" "$script_arg" ${sq(repo)} ${sq(String(number))} ${sq(mode)}`)
-  } finally { sh(`unlink ${sq(script)}; unlink ${sq(encoded)}`).catch(() => {}) }
+  } finally { await removeTempDir(dir, ['collector.py', 'collector.b64']) }
 }
 export function startFixChecks(api, snapshot, options, { storage, profile = 'default', onState = () => {}, refresh = (repo, number) => collectFailingChecks(repo, number, { mode: 'metadata' }) } = {}) {
   let plan
@@ -3281,8 +3296,8 @@ function paceAggregate(work) {
 }
 async function runAggregateGraphql(request) {
   return paceAggregate(async () => {
-    const tag = `/tmp/ghaggregate.${Date.now().toString(36)}${Math.random().toString(36).slice(2,8)}`
-    const input = `${tag}.json`, response = `${tag}.response`, errors = `${tag}.err`, encoded = `${tag}.b64`
+    const dir = await tempDir('ghaggregate')
+    const input = `${dir}/request.json`, response = `${dir}/response`, errors = `${dir}/errors`, encoded = `${dir}/request.b64`
     try {
       const payload = utf8ToB64(JSON.stringify({query:request.query,variables:request.variables}))
       await sh(`: > ${sq(encoded)}`)
@@ -3291,7 +3306,7 @@ async function runAggregateGraphql(request) {
       // gh exits 1 on partial GraphQL errors too. Keep the JSON data+errors
       // envelope, but never turn an empty/network response into success.
       return await shJsonBig(`${GH} api graphql --input - < ${sq(input)} > ${sq(response)} 2> ${sq(errors)}; result=$?; if [ -s ${sq(response)} ]; then cat ${sq(response)}; else cat ${sq(errors)} >&2; exit $result; fi`)
-    } finally { sh(`unlink ${sq(input)}; unlink ${sq(response)}; unlink ${sq(errors)}; unlink ${sq(encoded)}`).catch(() => {}) }
+    } finally { await removeTempDir(dir, ['request.json', 'response', 'errors', 'request.b64']) }
   })
 }
 export async function fetchAggregatePage(options, previous, run = runAggregateGraphql) {

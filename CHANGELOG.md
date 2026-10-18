@@ -18,6 +18,7 @@ All notable changes to GitHermes are documented in this file. Format based on [K
 - The price-table textarea draft resyncs when the prices store changes externally (#29, c65aaea, Refs #28).
 
 ### Security
+- Comment upload, chunked reads, the failing-check collector and aggregate GraphQL no longer use predictable `Date.now`/`Math.random` paths under `/tmp`. Each call creates a private directory with `mktemp -d` (`${TMPDIR:-/tmp}/<prefix>.XXXXXX`, mode 700) and removes it in a `finally` block by unlinking the known files and then `rmdir` (#33).
 - The plugin update check and update source (`PLUGIN_REPO` in `desktop/plugin.js`) now point to `CromeSDK-Plugins/githermes` instead of the upstream repository `claudiumio/githermes` (#32, 253655f, Refs #30).
 - Metadata correction: `plugin.yaml` `homepage` and `package.json` `homepage`/`repository` now point to `CromeSDK-Plugins/githermes` instead of `Crome696/githermes`, and `package.json` gains `bugs.url` (#32, 253655f, Refs #30).
 
