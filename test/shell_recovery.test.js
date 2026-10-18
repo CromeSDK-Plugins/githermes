@@ -14,6 +14,7 @@ function fixture({ git = '', bash = '', defaults = '', found = [], reject } = {}
     assert.equal(method, 'shell.exec')
     calls.push(command)
     if (reject) throw reject
+    if (command === 'echo GITHERMES_SHELL_%OS%') return result('GITHERMES_SHELL_Windows_NT\r\n')
     if (command === 'where git') return result(git)
     if (command === 'where bash') return result(bash)
     if (command.includes('%ProgramFiles%')) return result(defaults)
@@ -81,6 +82,22 @@ test('host rejection is not replaced with plugin missing-Bash and can be retried
 test('POSIX commands remain unchanged without Windows discovery', async () => {
   const f = makeTransport({ request: () => { throw new Error('unexpected probe') } }, true)
   assert.equal(await f.shellCommand("gh api 'user/repos' | wc -c"), "gh api 'user/repos' | wc -c")
+})
+test('Windows client with a Linux shell.exec backend does not require Git Bash', async () => {
+  // POSIX_SHELL false is the Windows Desktop decision (navigator.platform / userAgent).
+  // shell.exec here is the remote Linux gateway: /bin/sh does not expand %OS%.
+  const calls = []
+  const host = { request: async (method, { command }) => {
+    assert.equal(method, 'shell.exec')
+    calls.push(command)
+    if (command === 'echo GITHERMES_SHELL_%OS%') return { stdout: 'GITHERMES_SHELL_%OS%\n', stderr: '', code: 0 }
+    if (command === 'where git' || command === 'where bash' || command.includes('%ProgramFiles%') || command.includes('uname -s'))
+      return { stdout: '', stderr: 'not found\n', code: 127 }
+    throw new Error(`data command ran: ${command}`)
+  } }
+  const f = makeTransport(host, false)
+  assert.equal(await f.shellCommand('gh repo view CromeSDK/hermes-auto-reasoning'), 'gh repo view CromeSDK/hermes-auto-reasoning')
+  assert.deepEqual(calls, ['echo GITHERMES_SHELL_%OS%'])
 })
 test('missing Bash, Windows missing gh and auth have concrete recovery steps', () => {
   for (const raw of ['Git for Windows bash.exe was not found', 'No shell found. Hermes needs bash (Git for Windows on Windows).']) {
