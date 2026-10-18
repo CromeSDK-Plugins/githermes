@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/CromeSDK-Plugins/githermes/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/CromeSDK-Plugins/githermes/actions/workflows/ci.yml)
 
-GitHermes **0.6.4** — [CromeSDK-Plugins/githermes](https://github.com/CromeSDK-Plugins/githermes).
+GitHermes **0.6.5** — [CromeSDK-Plugins/githermes](https://github.com/CromeSDK-Plugins/githermes).
 
 GitHub PRs & Issues as a right workspace pane in [Hermes Desktop](https://hermes-agent.nousresearch.com/docs/user-guide/desktop).
 
@@ -275,7 +275,9 @@ defaults, with no accidental refinement permission. Explicit new preferences
 persist across reloads. Metadata is untrusted JSON data, with line separators
 escaped so titles cannot inject native completion-contract fields.
 A known matching cwd is supplied only for a single-repository queue; cross-repo
-work must locate and verify each checkout and remote inside the user's allowlist.
+work locates and verifies each checkout and remote independently; Hermes chooses
+where checkouts and worktrees are searched for or created. A known matching cwd
+is still supplied for a single-repository queue.
 
 The native Goal is persistent; **the issue sequence and repo workers are
 model-directed**, not an atomic native issue executor or a guarantee of parallel

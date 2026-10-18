@@ -26,12 +26,12 @@ test('native Goal start creates one profiled session, persists the Goal before k
   if (m === 'prompt.submit') return { status: 'ok' }
   throw new Error(m)
  } }
- const plan = plugin.buildQueueGoalPlan(d, { profile: 'worker', sessionRepo: 'octocat/Hello-World', sessionCwd: 'C:/Users/Jsiem/Documents/Hermes/fixture' })
+ const plan = plugin.buildQueueGoalPlan(d, { profile: 'worker', sessionRepo: 'octocat/Hello-World', sessionCwd: '/tmp/app' })
  const results = await Promise.all([plugin.startIssueQueue(api, d, { storage, plan }), plugin.startIssueQueue(api, d, { storage, plan })])
  assert.equal(results[0].stored_session_id, 'stored-test')
  assert.equal(calls.filter(c => c[0] === 'session.create').length, 1)
  assert.equal(calls.find(c => c[0] === 'session.create')[1].profile, 'worker')
- assert.equal(calls.find(c => c[0] === 'session.create')[1].cwd, 'C:/Users/Jsiem/Documents/Hermes/fixture')
+ assert.equal(calls.find(c => c[0] === 'session.create')[1].cwd, '/tmp/app')
  assert.match(calls.find(c => c[0] === 'session.create')[1].idempotency_key, /^githermes-queue-/)
  assert.ok(calls.findIndex(c => c[0] === 'prompt.submit') > calls.findIndex(c => c[0] === 'command.dispatch'))
  assert.equal(data.get('botAssignments')['issue:octocat/hello-world#42'].profile, 'worker')
@@ -68,7 +68,7 @@ function fixture() {
  const api = { request, openSession: async (...args) => calls.push(['open', ...args]), getGateway: () => ({ request }) }
  let draft = plugin.emptyGlobalIssueQueue()
  for (const repo of ['octocat/Hello-World', 'github/sdk']) draft = plugin.updateGlobalIssueQueue(draft, { type: 'toggle', item: item(repo) })
- const plan = plugin.buildQueueGoalPlan(draft, { profile: 'worker', sessionRepo: 'octocat/Hello-World', sessionCwd: 'C:/Users/Jsiem/Documents/Hermes/fixture' })
+ const plan = plugin.buildQueueGoalPlan(draft, { profile: 'worker', sessionRepo: 'octocat/Hello-World', sessionCwd: '/tmp/app' })
  return { api, storage, data, calls, state, draft, plan, run: () => plugin.startIssueQueue(api, draft, { storage, plan }) }
 }
 test('cross-repo prompt never supplies a misleading cwd; merge consent applies only to explicit opt-in', () => {
@@ -79,6 +79,25 @@ test('cross-repo prompt never supplies a misleading cwd; merge consent applies o
  const opted = plugin.updateGlobalIssueQueue(f.draft, { type: 'options', options: { autoMerge: true, strategy: 'rebase' } })
  assert.match(plugin.buildQueueGoalPlan(opted).prompt, /Opt-in nur für diese Queue: Merge-Strategie rebase/)
  assert.equal(plugin.restoreGlobalIssueQueue(opted).options.autoMerge, false)
+})
+test('Issue and PR queue prompts leave checkout discovery to Hermes without hard-coded paths', () => {
+ let issueDraft = plugin.updateGlobalIssueQueue(plugin.emptyGlobalIssueQueue(), { type: 'toggle', item: item('octocat/Hello-World') })
+ issueDraft = plugin.updateGlobalIssueQueue(issueDraft, { type: 'toggle', item: item('github/sdk') })
+ const prDraft = plugin.updateGlobalPrQueue(plugin.emptyGlobalPrQueue(), { type: 'toggle', item: { ...item('octocat/Hello-World'), author: 'octocat' } })
+ const issueSingle = plugin.updateGlobalIssueQueue(plugin.emptyGlobalIssueQueue(), { type: 'toggle', item: item('octocat/Hello-World') })
+ const issuePrompt = plugin.buildQueueGoalPlan(issueSingle, { sessionRepo: 'octocat/Hello-World', sessionCwd: '/tmp/app' }).prompt
+ const issueParallel = plugin.buildQueueGoalPlan(plugin.updateGlobalIssueQueue(issueDraft, { type: 'options', options: { repositoryExecution: 'parallel' } })).prompt
+ const issueWithoutCwd = plugin.buildQueueGoalPlan(issueDraft).prompt
+ const prPrompt = plugin.buildPrQueueGoalPlan(prDraft).prompt
+ for (const prompt of [issuePrompt, issueWithoutCwd, prPrompt]) assert.doesNotMatch(prompt, /C:\\Users\\|C:\/Users\/|allowlist/i)
+ assert.match(issuePrompt, /Bekannter passender Einzelrepo-Checkout: "\/tmp\/app"/)
+ assert.match(issueWithoutCwd, /Hermes ermittelt den passenden Checkout selbst/)
+ assert.match(prPrompt, /Hermes entscheidet selbst, wo passende Checkouts und Worktrees gesucht oder angelegt werden/)
+ assert.match(issuePrompt, /Vor jeder Änderung Repository und Remote prüfen/)
+ assert.match(issuePrompt, /niemals behaupten, ein gemeinsames cwd sei der Checkout aller Repos/)
+ assert.match(issueParallel, /separat verifizierten Checkout oder isolierten Worktree/)
+ assert.match(prPrompt, /Vor jeder Mutation Repository und Remote prüfen/)
+ assert.match(prPrompt, /Kein gemeinsames cwd für fremde Repos behaupten/)
 })
 test('migration retains the existing 27/26/25 selection and all valid legacy drafts without mutating originals', () => {
  const old = {}

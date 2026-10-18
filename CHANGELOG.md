@@ -4,6 +4,10 @@ All notable changes to GitHermes are documented in this file. Format based on [K
 
 ## [Unreleased]
 
+### Fixed
+- Issue and PR queue Goals no longer embed a machine-specific checkout path or allowlist; Hermes chooses checkout/worktree locations, while matching single-repository session cwd and repository/remote verification remain intact (#49).
+- Queue prompt changes update Goal fingerprints, so previously run selections are eligible to start again.
+
 ### Added
 - Repo guard tests: `test/repo_guard.test.js` fails if `desktop/plugin.js` contains foreign repository identifiers (`claudiumio`, `claudioorjunior`, `Crome696/`); `sdk_compatibility` requires every `compare` target in `desktop/plugin.js` to use `PLUGIN_REPO` and every literal `repos/<owner>/<repo>/compare` and `https://github.com/<owner>/…` in `desktop/plugin.js` to use the owner `CromeSDK-Plugins` (owner guard, 3adbc50), and asserts the new homepage/repository/bugs URLs and that no manifest contains `Crome696/githermes` (#32, 253655f, Refs #30).
 
