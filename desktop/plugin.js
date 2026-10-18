@@ -46,10 +46,675 @@ import {
 } from '@hermes/plugin-sdk'
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { jsx, jsxs, Fragment } from 'react/jsx-runtime'
-import { buildFinalizeQuery, decodeFinalizeResponse, finalizeMarkdown, finalizePollInterval } from './finalize.js'
-import { buildIssueDraftBody, confirmedIssueWrite, detectIssueDraftCandidate, duplicateSearchQuery, issueBodyDiff, issueDraftFinalBody, issueDraftRepoFromMessages, issueDraftTitle, parseIssueDraftResponse, redactIssueSecrets, resolveIssueDraftRepo } from './issue_draft.js'
-import { createMetricsController, noteGoalReceipt } from './goal_metrics_runtime.js'
-import { $goalMetrics, $showGoalMetrics, GoalReceiptMetrics, GoalMetricsOverview, GoalMetricsSettings, setMetricsController } from './goal_metrics_ui.js'
+/** Numeric/metadata-only Goal accounting. No transcript parsing or snapshot addition. */
+export const METRICS_KEY = 'goalUsageMetricsV1'
+export const PRICES_KEY = 'goalUsagePricesV1'
+export const TOKEN_KEYS = ['input', 'output', 'reasoning', 'cacheRead', 'cacheWrite']
+const text = value => typeof value === 'string' && value.length <= 256 && !/[\r\n\x00-\x1f]/.test(value) ? value : ''
+const positive = value => typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
+const count = value => Number.isSafeInteger(value) && value > 0 ? value : null
+const time = value => positive(value) !== null && Number.isFinite(new Date(value * 1000).getTime()) ? value : null
+export const metricsId = (connection, profile, session) => JSON.stringify([connection, profile, session])
+
+export function metricFromReceipt(receipt, kind, connection = 'local', ownerProfile = receipt?.plan?.profile) {
+  if (!text(receipt?.stored_session_id) || !text(receipt?.session_id) || !text(receipt.plan?.profile)) return null
+  const info = receipt.modelReadback || {}
+  const items = (Array.isArray(receipt.plan.items) ? receipt.plan.items : []).filter(i => i && /^[\w.-]+\/[\w.-]+$/.test(i.repo) && Number.isSafeInteger(i.number) && i.number > 0).map(i => ({ repo: i.repo.toLowerCase(), number: i.number }))
+  return {
+    id: metricsId(connection, receipt.plan.profile, receipt.stored_session_id), connection: text(connection),
+    profile: text(receipt.plan.profile), ownerProfile: text(ownerProfile), session: text(receipt.stored_session_id), runtime: text(receipt.session_id),
+    kind: ['issue', 'pr', 'fix'].includes(kind) ? kind : 'issue', items,
+    model: text(info.model), provider: text(info.provider),
+    reasoning: typeof info.reasoning_effort === 'string' ? text(info.reasoning_effort) : null,
+    fast: typeof info.fast === 'boolean' ? info.fast : null,
+    handoff: text(receipt.stage), status: 'unknown', startedAt: null, endedAt: null, observedAt: null,
+    tokens: Object.fromEntries(TOKEN_KEYS.map(k => [k, null])), cost: null, modelChanged: false,
+  }
+}
+
+/** All-zero and absent fields are indistinguishable from backend normalization.
+ * Never promote either to provider-reported usage. A positive counter is usable;
+ * a missing/zero bucket stays unknown even when another bucket is positive. */
+export function usageSnapshot(payload) {
+  const u = payload?.usage && typeof payload.usage === 'object' ? payload.usage : payload || {}
+  const pick = (...keys) => { for (const key of keys) { const n = count(u[key]); if (n !== null) return n } return null }
+  return {
+    input: pick('input', 'input_tokens'), output: pick('output', 'output_tokens'),
+    reasoning: pick('reasoning', 'reasoning_tokens'), cacheRead: pick('cache_read', 'cache_read_tokens'),
+    cacheWrite: pick('cache_write', 'cache_write_tokens'),
+  }
+}
+
+export function hermesCost(payload) {
+  const u = payload?.usage && typeof payload.usage === 'object' ? payload.usage : payload || {}
+  for (const [field, fallback] of [['actual_cost_usd', 'actual'], ['cost_usd', 'unknown'], ['estimated_cost_usd', 'estimated']]) {
+    const amount = u[field], status = ['actual', 'estimated', 'included', 'unknown'].includes(u.cost_status) ? u.cost_status : fallback
+    if (positive(amount) !== null || amount === 0 && ['actual', 'included'].includes(u.cost_status)) return { amount, status, source: 'hermes' }
+  }
+  return null
+}
+
+export function updateMetric(record, { usage, control, info, now = Date.now() / 1000 } = {}) {
+  if (record.endedAt !== null) return record // terminal snapshots cannot absorb later chat usage
+  const next = { ...record, tokens: { ...record.tokens } }
+  const identity = info || usage?.usage || usage || {}
+  if (text(identity.model)) {
+    next.modelChanged ||= !!next.model && next.model !== identity.model
+    next.model = identity.model
+  }
+  if (text(identity.provider)) next.provider = identity.provider
+  if (typeof identity.reasoning_effort === 'string') next.reasoning = text(identity.reasoning_effort)
+  if (typeof identity.fast === 'boolean') next.fast = identity.fast
+  if (usage !== undefined) {
+    const snapshot = usageSnapshot(usage)
+    // Counters are cumulative. Replace (do not sum or max); a reset must not leave
+    // old usage masquerading as the new runtime's counters. But an empty/null
+    // snapshot carries no new observation and must not erase recorded totals.
+    const rawUsage = usage?.usage && typeof usage.usage === 'object' ? usage.usage : usage
+    const hasTokenObservation = TOKEN_KEYS.some(key => snapshot[key] !== null) ||
+      ['input', 'input_tokens', 'output', 'output_tokens', 'reasoning', 'reasoning_tokens', 'cache_read', 'cache_read_tokens', 'cache_write', 'cache_write_tokens'].some(key => typeof rawUsage?.[key] === 'number')
+    const reportedCost = hermesCost(usage)
+    if (hasTokenObservation || reportedCost) {
+      next.tokens = snapshot
+      next.cost = reportedCost
+      next.observedAt = time(now)
+    }
+  }
+  const goal = control?.control?.goal ?? control?.goal
+  if (goal) {
+    if (time(goal.created_at)) next.startedAt = goal.created_at
+    if (['active', 'paused', 'done'].includes(goal.status)) next.status = goal.status
+    if (goal.status === 'done') next.endedAt = time(now) // observed, NOT a native completion timestamp
+  }
+  return next
+}
+
+/** Closed serialization boundary: unexpected fields (prompts, replies, errors,
+ * contracts, titles, raw payloads) never enter metrics storage or CSV. */
+export function restoreMetrics(value) {
+  if (!Array.isArray(value)) return []
+  const records = new Map()
+  for (const row of value) {
+    if (!row || !text(row.session) || !text(row.profile) || !text(row.connection)) continue
+    const base = metricFromReceipt({ stored_session_id: row.session, session_id: text(row.runtime) || row.session, plan: { profile: row.profile, items: row.items }, stage: row.handoff, modelReadback: { model: row.model, provider: row.provider, reasoning_effort: row.reasoning, fast: row.fast } }, row.kind, row.connection, row.ownerProfile || row.profile)
+    base.status = ['active', 'paused', 'done'].includes(row.status) ? row.status : 'unknown'
+    base.startedAt = time(row.startedAt); base.endedAt = base.status === 'done' ? time(row.endedAt) : null
+    base.observedAt = time(row.observedAt); base.modelChanged = row.modelChanged === true
+    base.tokens = Object.fromEntries(TOKEN_KEYS.map(k => [k, count(row.tokens?.[k])]))
+    base.cost = row.cost?.source === 'hermes' ? hermesCost({ cost_usd: row.cost.amount, cost_status: row.cost.status }) : null
+    records.set(base.id, base)
+  }
+  return [...records.values()]
+}
+
+export function validatePrices(value) {
+  if (!value || value.version !== 1 || !Array.isArray(value.rows)) throw new Error('Preistabelle benötigt version: 1 und rows.')
+  const seen = new Set()
+  const rows = value.rows.map(row => {
+    if (!row || row.provider !== undefined && row.provider !== '' && !text(row.provider)) throw new Error('Provider muss eine gültige Zeichenfolge oder leer sein.')
+    if (!text(row.model) || !row.model || !/^\d{4}-\d{2}-\d{2}$/.test(row.date || '') || new Date(`${row.date}T00:00:00Z`).toISOString().slice(0, 10) !== row.date) throw new Error('Modell und gültiges Preisdatum (YYYY-MM-DD) angeben.')
+    const provider = text(row.provider) || ''
+    const key = JSON.stringify([provider, row.model])
+    if (seen.has(key)) throw new Error('Doppelter Modell-/Provider-Preis.')
+    seen.add(key)
+    const rates = {}
+    for (const key of ['input', 'output', 'cacheRead', 'cacheWrite']) {
+      if (row[key] === null || row[key] === undefined) rates[key] = null
+      else if (typeof row[key] !== 'number' || !Number.isFinite(row[key]) || row[key] < 0) throw new Error('Preise müssen nichtnegative Zahlen oder null sein (USD pro Million Tokens).')
+      else rates[key] = row[key]
+    }
+    return { provider, model: row.model, date: row.date, ...rates }
+  })
+  return { version: 1, rows }
+}
+export function restorePrices(value) { try { return validatePrices(value) } catch { return { version: 1, rows: [] } } }
+
+export function metricCost(record, table) {
+  if (record.cost) return { ...record.cost, partial: false }
+  if (record.tokens.input === null || record.tokens.output === null || record.modelChanged) return { amount: null, label: 'nicht verfügbar', partial: false }
+  const row = table.rows.find(r => r.model === record.model && r.provider === record.provider) || table.rows.find(r => r.model === record.model && r.provider === '')
+  if (!row) return { amount: null, label: 'kein Preis hinterlegt', partial: false }
+  let amount = 0, partial = false
+  for (const key of ['input', 'output', 'cacheRead', 'cacheWrite']) {
+    const tokens = record.tokens[key]
+    if (tokens === null) { partial = true; continue }
+    if (row[key] === null) return { amount: null, label: 'kein Preis hinterlegt', partial: false }
+    amount += tokens * row[key]
+  }
+  amount /= 1_000_000
+  return Number.isFinite(amount) ? { amount, status: 'estimated', source: 'table', date: row.date, partial } : { amount: null, label: 'nicht verfügbar', partial: false }
+}
+export function metricDuration(record, now = Date.now() / 1000) {
+  if (!record.startedAt) return null
+  const end = record.endedAt ?? now
+  return end >= record.startedAt ? end - record.startedAt : null
+}
+export function filterMetrics(records, { profile = '', model = '' } = {}) {
+  return records.filter(r => (!profile || r.profile === profile) && (!model || r.model === model)).sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0))
+}
+function periodKey(epoch, period) {
+  const d = new Date(epoch * 1000)
+  if (period === 'month') return d.toISOString().slice(0, 7)
+  if (period === 'week') { const day = d.getUTCDay() || 7; d.setUTCDate(d.getUTCDate() - day + 1) }
+  return d.toISOString().slice(0, 10)
+}
+/** Bucket by Goal creation, UTC calendar day / Monday week / month. Unknown
+ * members stay visible as missing counts, never silently become zero totals. */
+export function aggregateMetrics(records, period, table, filters = {}, now = Date.now() / 1000) {
+  if (!['day', 'week', 'month'].includes(period)) throw new Error('Ungültiger Zeitraum')
+  const groups = new Map()
+  for (const row of filterMetrics(records, filters)) {
+    const key = row.startedAt ? periodKey(row.startedAt, period) : 'Start nicht verfügbar'
+    if (!groups.has(key)) groups.set(key, { key, goals: 0, duration: null, durationMissing: 0, tokens: Object.fromEntries(TOKEN_KEYS.map(k => [k, null])), missing: Object.fromEntries(TOKEN_KEYS.map(k => [k, 0])), cost: null, costMissing: 0, costPartial: 0, estimated: false })
+    const g = groups.get(key); g.goals++
+    const duration = metricDuration(row, now)
+    if (duration === null) g.durationMissing++; else g.duration = (g.duration ?? 0) + duration
+    for (const k of TOKEN_KEYS) { if (row.tokens[k] === null) g.missing[k]++; else g.tokens[k] = (g.tokens[k] ?? 0) + row.tokens[k] }
+    const cost = metricCost(row, table)
+    if (cost.amount === null) g.costMissing++; else { g.cost = (g.cost ?? 0) + cost.amount; g.estimated ||= cost.status === 'estimated' || cost.source === 'table'; if (cost.partial) g.costPartial++ }
+  }
+  return [...groups.values()].sort((a, b) => b.key.localeCompare(a.key))
+}
+const cell = value => {
+  let s = value === null || value === undefined ? '' : String(value)
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}` // spreadsheet formula injection
+  return `"${s.replaceAll('"', '""')}"`
+}
+export function metricsCsv(records, table, filters = {}, now = Date.now() / 1000) {
+  const columns = ['connection', 'profile', 'session', 'kind', 'items', 'model', 'provider', 'reasoning', 'fast', 'status', 'start_epoch', 'end_observed_epoch', 'duration_seconds', 'usage_observed_epoch', ...TOKEN_KEYS, 'cost_usd', 'cost_status', 'cost_source', 'cost_partial', 'price_date']
+  return [columns, ...filterMetrics(records, filters).map(r => {
+    const c = metricCost(r, table)
+    return [r.connection, r.profile, r.session, r.kind, r.items.map(i => `${i.repo}#${i.number}`).join('; '), r.model, r.provider, r.reasoning, r.fast, r.status, r.startedAt, r.endedAt, metricDuration(r, now), r.observedAt, ...TOKEN_KEYS.map(k => r.tokens[k]), c.amount, c.status || c.label, c.source, c.partial, c.date]
+  })].map(row => row.map(cell).join(',')).join('\r\n') + '\r\n'
+}
+
+const STATES = Object.freeze({
+  open: 'offen',
+  working: 'in Arbeit',
+  pr: 'PR offen',
+  failing: 'PR mit Failing Checks',
+  merged: 'gemerged',
+  closed: 'geschlossen ohne Merge',
+})
+
+export function buildFinalizeQuery(items) {
+  if (!Array.isArray(items) || items.length > 50) throw new Error('Finalization batch must contain at most 50 issues')
+  const variables = {}, declarations = [], fields = []
+  items.forEach((item, index) => {
+    if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(item?.repo || '') || !Number.isSafeInteger(item.number) || item.number < 1) throw new Error('Invalid queued issue')
+    const [owner, name] = item.repo.split('/')
+    const ownerVar = `owner${index}`, nameVar = `name${index}`, numberVar = `number${index}`
+    variables[ownerVar] = owner; variables[nameVar] = name; variables[numberVar] = item.number
+    declarations.push(`$${ownerVar}: String!, $${nameVar}: String!, $${numberVar}: Int!`)
+    fields.push(`i${index}: repository(owner:$${ownerVar},name:$${nameVar}) { issue(number:$${numberVar}) { number title state stateReason url timelineItems(itemTypes:[CONNECTED_EVENT,CROSS_REFERENCED_EVENT],last:50) { nodes { ... on ConnectedEvent { subject { ... on PullRequest { number title url state merged mergedAt closingIssuesReferences(first:100) { nodes { number repository { nameWithOwner } } } commits(last:1) { nodes { commit { statusCheckRollup { state } } } } } } } ... on CrossReferencedEvent { willCloseTarget source { ... on PullRequest { number title url state merged mergedAt closingIssuesReferences(first:100) { nodes { number repository { nameWithOwner } } } commits(last:1) { nodes { commit { statusCheckRollup { state } } } } } } } } } } }`)
+  })
+  return { query: `query Finalize(${declarations.join(',')}) { ${fields.join(' ')} }`, variables }
+}
+
+function pullRequests(issue) {
+  const prs = new Map()
+  for (const event of issue?.timelineItems?.nodes || []) {
+    const candidate = event?.subject || (event?.willCloseTarget ? event.source : null)
+    if (!candidate?.url || !candidate?.number) continue
+    const refs = candidate.closingIssuesReferences?.nodes || []
+    const matches = refs.some(ref => ref.number === issue.number && ref.repository?.nameWithOwner?.toLowerCase() === issue.repository?.nameWithOwner?.toLowerCase())
+    const old = prs.get(candidate.url)
+    prs.set(candidate.url, { ...candidate, closes: !!matches || !!event.willCloseTarget || !!old?.closes })
+  }
+  return [...prs.values()]
+}
+
+export function deriveFinalizeRow(item, issue, assigned = false) {
+  const refs = pullRequests(issue)
+  // Prefer closing references; otherwise use connected/cross-reference PRs.
+  const byPreference = list => list.sort((a,b) => Number(a.state !== 'OPEN')-Number(b.state !== 'OPEN') || String(b.mergedAt || '').localeCompare(String(a.mergedAt || '')))
+  const selected = byPreference(refs.filter(pr => pr.closes))[0] || byPreference(refs.slice())[0]
+  let state
+  if (selected?.merged || selected?.state === 'MERGED') state = STATES.merged
+  else if (issue?.state === 'CLOSED') state = STATES.closed
+  else if (selected?.state === 'CLOSED') state = assigned ? STATES.working : STATES.open
+  else if (selected) state = ['FAILURE','ERROR'].includes(String(selected.commits?.nodes?.[0]?.commit?.statusCheckRollup?.state || '').toUpperCase()) ? STATES.failing : STATES.pr
+  else state = assigned ? STATES.working : STATES.open
+  return { ...item, title: issue?.title || item.title || `#${item.number}`, url: issue?.url || `https://github.com/${item.repo}/issues/${item.number}`, state, prs: refs, pr: selected || null }
+}
+
+export function decodeFinalizeResponse(payload, items, assignments = {}) {
+  if (payload?.errors?.length) throw new Error(payload.errors.map(e => e.message).join('; '))
+  return items.map((item, index) => {
+    const issue = payload?.data?.[`i${index}`]?.issue
+    if (!issue) throw new Error(`Issue ${item.repo}#${item.number} is missing from GraphQL response`)
+    issue.repository = { nameWithOwner: item.repo }
+    return deriveFinalizeRow(item, issue, !!assignments[`issue:${item.repo.toLowerCase()}#${item.number}`])
+  })
+}
+
+export function finalizeMarkdown(rows) {
+  const cell = value => String(value ?? '').replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/[\r\n]+/g, ' ')
+  return ['| Issue | Zustand | PR |', '| --- | --- | --- |', ...rows.map(row => `| [${cell(row.repo)}#${row.number}](${row.url}) ${cell(row.title)} | ${cell(row.state)} | ${row.pr ? `[ #${row.pr.number} ](${row.pr.url})` : '–'} |`)].join('\n')
+}
+
+export function finalizePollInterval(rows) {
+  return Array.isArray(rows) && rows.length && rows.every(row => ![STATES.open, STATES.working, STATES.failing].includes(row.state)) ? false : 30_000
+}
+export { STATES as FINALIZE_STATES }
+
+const REPO = /^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/
+const PATH_ROOTS = new Set(['src', 'test', 'tests', 'lib', 'desktop', 'scripts', 'docs', 'assets', 'dist', 'build', 'packages', 'apps', 'components', 'node_modules'])
+const NON_REPO_PAIRS = new Set(['and/or', 'tcp/ip', 'i/o', 'km/h'])
+
+function isRepoMention(owner, repo, text, start) {
+  const before = text[start - 1] || ''
+  const end = start + owner.length + 1 + repo.length
+  const after = text[end] || ''
+  if (before === '/' || before === '.' || after === '/') return false
+  if (PATH_ROOTS.has(owner.toLowerCase())) return false
+  if (NON_REPO_PAIRS.has(`${owner}/${repo}`.toLowerCase())) return false
+  if (/^\d+$/.test(owner) && /^\d+$/.test(repo)) return false
+  return true
+}
+
+export function resolveIssueDraftRepo({ sessionRepo, chatRepo } = {}) {
+  for (const value of [sessionRepo, chatRepo]) {
+    const repo = String(value || '').trim()
+    if (REPO.test(repo)) return repo
+  }
+  return ''
+}
+
+export function issueDraftRepoFromText(text) {
+  const value = String(text || '')
+  const url = value.match(/https?:\/\/github\.com\/([A-Za-z0-9][A-Za-z0-9-]*)\/([A-Za-z0-9][A-Za-z0-9_.-]*)(?=\/|[?#\s.,;!)]|$)/i)
+  if (url) return `${url[1]}/${url[2].replace(/\.git$/i, '')}`
+  const literal = value.trim().match(/^(?:repository\s*:\s*)?([A-Za-z0-9][A-Za-z0-9-]*)\/([A-Za-z0-9][A-Za-z0-9_.-]*)[.,;!]?$/i)
+  if (!literal) return ''
+  const owner = literal[1]
+  const repo = literal[2]
+  if (PATH_ROOTS.has(owner.toLowerCase()) || NON_REPO_PAIRS.has(`${owner}/${repo}`.toLowerCase())) return ''
+  return `${owner}/${repo}`
+}
+
+export function issueDraftRepoFromMessages(messages) {
+  if (!Array.isArray(messages)) return ''
+  for (const message of messages.slice().reverse()) {
+    const text = messageText(message)
+    if (!text) continue
+    const candidates = new Set()
+    const urlPattern = /https?:\/\/github\.com\/([A-Za-z0-9][A-Za-z0-9-]*)\/([A-Za-z0-9][A-Za-z0-9_.-]*)(?=\/|[?#\s.,;!)]|$)/gi
+    for (const match of text.matchAll(urlPattern)) candidates.add(`${match[1]}/${match[2].replace(/\.git$/i, '').replace(/[.,;!]+$/, '')}`)
+    const withoutUrls = text.replace(/https?:\/\/github\.com\/[^\s]*/gi, ' ')
+    const literalPattern = /(?<![A-Za-z0-9_./-])([A-Za-z0-9][A-Za-z0-9-]*)\/([A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9_-])?)(?![A-Za-z0-9_./-])/g
+    for (const match of withoutUrls.matchAll(literalPattern)) {
+      const owner = match[1]
+      const repo = match[2]
+      if (!isRepoMention(owner, repo, withoutUrls, match.index)) continue
+      candidates.add(`${owner}/${repo}`)
+    }
+    if (candidates.size) return candidates.size === 1 ? [...candidates][0] : ''
+  }
+  return ''
+}
+
+export function redactIssueSecrets(value) {
+  if (Array.isArray(value)) return value.map(redactIssueSecrets)
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactIssueSecrets(item)]))
+  if (typeof value !== 'string') return value
+  return value
+    .replace(/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|$)/g, '[REDACTED PRIVATE KEY]')
+    .replace(/(?:sk[-_]|gh[pousr]_|github_pat_|npm_|pypi-|xox[baprs]-|xapp-\d+-|AIza|pplx-|fal_|fc-|bb_live_|gAAAA|[sr]k_live_|sk_test_|SG\.|hf_|r8_|do[po]_v1_|am_(?:org_)?|tvly-|exa_|gsk_|syt_|retaindb_|hsk-|mem0_|brv_|xai-|ntn_|fw[-_]|fpk-|gl(?:pat|oas|dt|rt|rtr|cbt|ptt|ft|imt|agent|soat|ffct|wt)-)[A-Za-z0-9_.=+/-]{10,}/gi, '[REDACTED]')
+    .replace(/\bAKIA[A-Z0-9]{16}\b/g, '[REDACTED]')
+    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[REDACTED JWT]')
+    .replace(/(https?:\/\/)[^\s/@:]+:[^\s/@]+@/gi, '$1[REDACTED]@')
+    .replace(/([?&](?:access_token|refresh_token|id_token|token|api_key|apikey|client_secret|password|auth|jwt|session|secret|key|code|signature|x-amz-signature|x-goog-signature|sig)=)[^&#\s]*/gi, '$1[REDACTED]')
+    .replace(/(authorization\s*[:=]\s*)(?:bearer|basic|digest)\s+[^\r\n]+/gi, '$1[REDACTED]')
+    .replace(/(["']?[\w.-]*(?:api.?key|token|secret|password|passwd|credential|auth|bearer|private.?key|key.material)[\w.-]*["']?\s*[:=]\s*)(["'])([\s\S]*?)\2/gi, (all, prefix, quote, secret) => secret.startsWith('[REDACTED') ? all : `${prefix}${quote}[REDACTED]${quote}`)
+    .replace(/(\b[\w.-]*(?:api.?key|token|secret|password|passwd|credential|auth|bearer|private.?key|key.material)[\w.-]*\s*[:=]\s*)(?!["']?\[REDACTED)([^\s,;&}\]]+)/gi, '$1[REDACTED]')
+    .replace(/(--(?:password|token|api-key|secret)\s+)[^\s]+/gi, '$1[REDACTED]')
+}
+
+export function buildIssueDraftBody({ goal = '', context = '', implementation = '', acceptance = [], references = [] } = {}) {
+  const bullets = values => values.map(value => String(value || '').trim()).filter(Boolean).map(value => `- [ ] ${value}`).join('\n') || '- [ ] Define acceptance criteria'
+  return [
+    '## Goal', String(goal).trim() || 'Describe the desired outcome.',
+    '## Context', String(context).trim() || 'Add relevant session context.',
+    '## Implementation', String(implementation).trim() || 'Describe the proposed implementation.',
+    '## Acceptance criteria', bullets(acceptance),
+    '## References', references.map(value => String(value || '').trim()).filter(Boolean).join('\n') || 'Add relevant session, PR, or issue links.',
+  ].join('\n\n')
+}
+
+export function issueDraftTitle(candidate = '') {
+  const firstLine = String(candidate || '').split(/\r?\n/).find(line => line.trim()) || ''
+  return redactIssueSecrets(firstLine.replace(/^\s*(?:[-*]\s*)?/, '').trim()).slice(0, 120) || 'Session issue draft'
+}
+
+export function duplicateSearchQuery(title, body) {
+  const boilerplate = /^(?:describe the desired outcome\.?|add relevant session context\.?|describe the proposed implementation\.?|define acceptance criteria\.?|add relevant session, pr, or issue links\.?)$/i
+  const content = String(body || '').split(/\r?\n/)
+    .filter(line => !/^\s*#{1,6}\s+/.test(line))
+    .map(line => line.replace(/^\s*-\s*\[\s*\]\s*/, '').trim())
+    .filter(line => line && !boilerplate.test(line))
+  const parts = [String(title || '').trim().slice(0, 90), ...content]
+  const seen = new Set()
+  const terms = parts.map(part => part.replace(/\s+/g, ' ').trim())
+    .filter(part => {
+      const key = part.toLowerCase()
+      if (!key || seen.has(key)) return false
+      seen.add(key)
+      return true
+    }).join(' ').slice(0, 180)
+  return `is:issue is:open in:title,body ${terms}`
+}
+
+function messageText(message) {
+  return typeof message?.content === 'string' ? message.content
+    : Array.isArray(message?.content) ? message.content.map(part => typeof part === 'string' ? part : part?.text || '').join('\n')
+      : typeof message?.text === 'string' ? message.text : ''
+}
+
+export function parseIssueDraftResponse(messages) {
+  if (!Array.isArray(messages)) return null
+  const requestIndex = messages.findLastIndex(message =>
+    ['user', 'human'].includes(String(message?.role || message?.author || '').toLowerCase()) && /draft (?:a github )?issue/i.test(messageText(message)))
+  for (const message of messages.slice(Math.max(0, requestIndex + 1)).slice(-20).reverse()) {
+    if (!['assistant', 'bot', 'model'].includes(String(message?.role || message?.author || '').toLowerCase())) continue
+    const text = redactIssueSecrets(messageText(message)).trim()
+    const match = text.match(/(?:^|\n)\s*(?:\*\*)?Title(?:\*\*)?\s*:\s*(.+?)\s*(?:\n+|$)(?:\s*(?:\*\*)?Body(?:\*\*)?\s*:\s*\n?)([\s\S]+)$/i)
+    if (match && match[1].trim() && match[2].trim()) return { title: match[1].trim(), body: match[2].trim() }
+  }
+  return null
+}
+
+export function issueDraftFromMessages(messages) {
+  if (!Array.isArray(messages)) return ''
+  return messages.slice(-30).map(messageText).filter(Boolean).join('\n')
+}
+
+export function detectIssueDraftCandidate(messages) {
+  if (!Array.isArray(messages)) return null
+  for (const message of messages.slice(-30).reverse()) {
+    const text = typeof message?.content === 'string' ? message.content
+      : Array.isArray(message?.content) ? message.content.map(part => typeof part === 'string' ? part : part?.text || '').join('\n')
+        : typeof message?.text === 'string' ? message.text : ''
+    const match = /\b(?:track this as an issue|turn this into an issue|create an issue for this|file an issue for this|follow[- ]up issue)\b/i.exec(text)
+    if (match) return redactIssueSecrets(text.slice(Math.max(0, match.index - 240), match.index + match[0].length + 500)).trim()
+  }
+  return null
+}
+
+export function issueBodyDiff(before, after) {
+  const oldLines = normalizeLineEndings(before).split('\n')
+  const newLines = normalizeLineEndings(after).split('\n')
+  let prefix = 0
+  while (prefix < oldLines.length && prefix < newLines.length && oldLines[prefix] === newLines[prefix]) prefix++
+  let suffix = 0
+  while (suffix < oldLines.length - prefix && suffix < newLines.length - prefix && oldLines[oldLines.length - 1 - suffix] === newLines[newLines.length - 1 - suffix]) suffix++
+  return [
+    ...oldLines.slice(Math.max(0, prefix - 2), prefix).map(line => `  ${line}`),
+    ...oldLines.slice(prefix, oldLines.length - suffix).map(line => `- ${line}`),
+    ...newLines.slice(prefix, newLines.length - suffix).map(line => `+ ${line}`),
+    ...oldLines.slice(oldLines.length - suffix).map(line => `  ${line}`),
+  ].join('\n')
+}
+
+export function rewriteIssueBody(existing, draft) {
+  const body = normalizeLineEndings(existing)
+  const content = normalizeLineEndings(draft).trim()
+  const start = '<!-- githermes:issue-draft:start -->'
+  const end = '<!-- githermes:issue-draft:end -->'
+  const startIndex = body.indexOf(start)
+  const endIndex = body.indexOf(end, startIndex + start.length)
+  if (startIndex >= 0 && endIndex >= 0) {
+    return `${body.slice(0, startIndex + start.length)}\n${content}\n${body.slice(endIndex)}`
+  }
+  const section = `${start}\n${content}\n${end}`
+  return body.trim() ? `${body.trimEnd()}\n\n${section}` : section
+}
+
+export function issueDraftFinalBody(selected, draftContent) {
+  return rewriteIssueBody(redactIssueSecrets(selected?.body || ''), redactIssueSecrets(draftContent || ''))
+}
+
+function normalizeLineEndings(value) {
+  const carriageReturn = String.fromCharCode(13)
+  return String(value || '').replaceAll(`${carriageReturn}\n`, '\n').replaceAll(carriageReturn, '\n')
+}
+
+export async function confirmedIssueWrite({ action, confirmed, repo, title, body, number, originalTitle, originalBody, readIssue, createIssue, updateIssue }) {
+  if (!confirmed) throw new Error('GitHub write requires explicit confirmation')
+  if (!REPO.test(String(repo || '')) || !String(title || '').trim() || !String(body || '').trim()) throw new Error('Issue draft is incomplete')
+  if (action === 'create') {
+    const created = await createIssue(repo, title, body)
+    const actual = await readIssue(repo, created.number)
+    if (actual.title !== title || String(actual.body ?? '') !== body) throw new Error('Created issue did not match the submitted title and body')
+    return actual
+  }
+  if (action === 'update') {
+    if (!Number.isSafeInteger(number) || number < 1) throw new Error('Invalid issue number')
+    const current = await readIssue(repo, number)
+    if (current.state && String(current.state).toUpperCase() !== 'OPEN') throw new Error('Duplicate issue is no longer open; refresh the search')
+    if ((originalTitle != null && current.title !== originalTitle) || String(current.body ?? '') !== String(originalBody ?? '')) throw new Error('Issue changed since review; reload and compare the new diff')
+    await updateIssue(repo, number, title, body)
+    const actual = await readIssue(repo, number)
+    if (actual.title !== title || String(actual.body ?? '') !== body) throw new Error('Updated issue did not match the submitted title and body')
+    return actual
+  }
+  throw new Error('Unsupported issue draft action')
+}
+
+
+const controllers = new WeakMap()
+/** Telemetry must never replay or fail an accepted native Goal handoff. */
+export function noteGoalReceipt(storage, receipt, kind, api, owner = {}) {
+  const controller = controllers.get(storage)
+  if (controller) controller.track(receipt, kind, owner)
+  else {
+    try {
+      const row = metricFromReceipt(receipt, kind, owner.connection || api?.state?.connectionId?.get?.() || 'local', owner.profile || api?.state?.profile?.get?.() || receipt.plan.profile)
+      if (!row) return
+      const records = restoreMetrics(storage.get(METRICS_KEY, []))
+      const old = records.find(r => r.id === row.id)
+      storage.set(METRICS_KEY, restoreMetrics([...records.filter(r => r.id !== row.id), old ? { ...old, handoff: row.handoff, runtime: row.runtime } : row]))
+    } catch { /* registration's controller surfaces storage failures in the UI */ }
+  }
+}
+
+export function createMetricsController(api, storage, { onChange = () => {}, interval = 10_000, now = () => Date.now() / 1000, schedule = setInterval, cancel = clearInterval } = {}) {
+  let records = restoreMetrics(storage.get(METRICS_KEY, [])), prices = restorePrices(storage.get(PRICES_KEY, null))
+  let disposed = false, inflight = null, failed = false
+  const leases = new Map(), captured = new Map(), watchers = new Map()
+  const emit = () => { if (!disposed) onChange({ records, prices, error: failed ? 'Metriken konnten nicht vollständig gelesen oder gespeichert werden; letzte Erfassung bleibt sichtbar.' : '' }) }
+  const commit = next => { const clean = restoreMetrics(next); storage.set(METRICS_KEY, clean); records = clean; emit() }
+  const connection = () => api.state?.connectionId?.get?.() || 'local'
+  function watch(id, gateway) {
+    if (watchers.get(id)?.gateway === gateway || typeof gateway?.onEvent !== 'function') return
+    watchers.get(id)?.dispose()
+    let sequence = -1
+    const dispose = gateway.onEvent(event => {
+      const row = records.find(r => r.id === id)
+      if (disposed || !row || row.endedAt || event.replayed || event.session_id !== row.runtime) return
+      if (!['session.usage', 'message.complete', 'session.control.update', 'session.info'].includes(event.type)) return
+      if (Number.isInteger(event.seq)) { if (event.seq <= sequence) return; sequence = event.seq }
+      const payload = event.payload || {}
+      const update = event.type === 'session.control.update' ? { control: payload }
+        : event.type === 'session.info' ? { info: payload }
+          : event.type === 'message.complete' && !payload.usage ? null : { usage: payload }
+      if (!update) return
+      try { commit(records.map(r => r.id === id ? updateMetric(r, { ...update, now: now() }) : r)) }
+      catch { failed = true; emit() }
+    })
+    watchers.set(id, { gateway, dispose })
+  }
+  async function request(record, method, params = {}) {
+    const gateway = captured.get(record.id)
+    if (gateway) return gateway.request(method, params)
+    const route = { connectionId: record.connection, profile: record.ownerProfile }
+    if (typeof api.requestProfile === 'function') {
+      const key = JSON.stringify(route)
+      if (!leases.has(key) && typeof api.retainProfileSocket === 'function') leases.set(key, api.retainProfileSocket(route))
+      return api.requestProfile(route, method, params)
+    }
+    // Old SDKs: only the captured owning gateway, never the newly focused tab.
+    let fallback
+    if (connection() === record.connection && (api.state?.profile?.get?.() || 'default') === record.ownerProfile) {
+      fallback = api.getGateway?.() || api
+      if (fallback !== api) { captured.set(record.id, fallback); watch(record.id, fallback) }
+    }
+    if (!fallback) throw new Error('Owning gateway unavailable')
+    return fallback.request(method, params)
+  }
+  const controller = {
+    get records() { return records },
+    get prices() { return prices },
+    setPrices(value) { storage.set(PRICES_KEY, value); prices = restorePrices(value); emit() },
+    track(receipt, kind, owner = {}) {
+      if (disposed) return
+      try {
+        const row = metricFromReceipt(receipt, kind, owner.connection || connection(), owner.profile || api.state?.profile?.get?.() || receipt.plan.profile)
+        if (!row) return
+        const old = records.find(r => r.id === row.id)
+        const next = old ? { ...old, runtime: row.runtime, handoff: row.handoff,
+          model: old.model || row.model, provider: old.provider || row.provider,
+          reasoning: old.reasoning ?? row.reasoning, fast: old.fast ?? row.fast } : row
+        // Capturing at handoff prevents a later focus change from redirecting reads.
+        const gateway = owner.gateway || api.getGateway?.()
+        commit([...records.filter(r => r.id !== row.id), next])
+        if (gateway) { captured.set(row.id, gateway); watch(row.id, gateway) }
+      } catch { failed = true; emit() }
+    },
+    refresh() {
+      if (disposed) return Promise.resolve()
+      if (inflight) return inflight
+      inflight = (async () => {
+        failed = false
+        // Sequential, bounded reads: no overlap between ticks or manual refreshes.
+        for (const initial of records.filter(r => !r.endedAt)) {
+          if (disposed) break
+          try {
+            const active = await request(initial, 'session.active_list')
+            // Stored timestamp IDs can collide across profiles in one gateway.
+            // Require both IDs; never follow a same-key foreign runtime.
+            const live = active?.sessions?.find(s => s.session_key === initial.session && s.id === initial.runtime)
+            if (!live) { failed = true; continue } // don't resume/create sessions for accounting
+            const params = { session_id: live.id }
+            let control, usage
+            // Independent availability: a host without usage must still show runtime;
+            // a host without structured control may still report token counters.
+            try { control = await request(initial, 'session.control.read', params) } catch { failed = true }
+            // Read AFTER control so done's final cumulative counters are available.
+            try { usage = await request(initial, 'session.usage', params) } catch { failed = true }
+            if (disposed) break
+            const current = records.find(r => r.id === initial.id)
+            const updated = updateMetric({ ...current, runtime: live.id }, { usage, control, now: now() })
+            commit(records.map(r => r.id === initial.id ? updated : r))
+          } catch { failed = true }
+        }
+        const activeRoutes = new Set(records.filter(r => !r.endedAt).map(r => JSON.stringify({ connectionId: r.connection, profile: r.ownerProfile })))
+        for (const [key, release] of leases) if (!activeRoutes.has(key)) { release(); leases.delete(key) }
+        emit()
+      })().finally(() => { inflight = null })
+      return inflight
+    },
+    dispose() {
+      disposed = true; cancel(timer)
+      for (const release of leases.values()) release()
+      for (const watcher of watchers.values()) watcher.dispose()
+      leases.clear(); captured.clear(); watchers.clear()
+      if (controllers.get(storage) === controller) controllers.delete(storage)
+    },
+  }
+  const timer = schedule(() => { void controller.refresh() }, interval)
+  timer?.unref?.() // Node contract tests must not be held open by telemetry.
+  controllers.set(storage, controller)
+  emit()
+  return controller
+}
+
+
+export const $goalMetrics = atom({ records: [], prices: { version: 1, rows: [] }, error: '' })
+export const $showGoalMetrics = atom(false)
+let controller = null
+export function setMetricsController(value) { controller = value }
+const number = value => value === null || value === undefined ? 'nicht verfügbar' : value.toLocaleString('de-DE', { maximumFractionDigits: 2 })
+const timestamp = value => value ? new Date(value * 1000).toLocaleString('de-DE') : 'nicht verfügbar'
+const seconds = value => value === null ? 'nicht verfügbar' : `${number(value)} s`
+export function costText(cost) {
+  if (cost.amount === null) return cost.label || 'nicht verfügbar'
+  const origin = cost.source === 'hermes' ? `Hermes · ${cost.status === 'actual' ? 'gemeldet' : cost.status === 'included' ? 'im Abo enthalten' : cost.status === 'estimated' ? 'geschätzt' : 'Kostenstatus unbekannt'}` : `geschätzt · Preistabelle ${cost.date}`
+  return `${cost.amount.toLocaleString('en-US', { minimumFractionDigits: 6, maximumFractionDigits: 8 })} USD · ${origin}${cost.partial ? ' · Teilsumme: Cache-Tokens nicht verfügbar' : ''}`
+}
+export function GoalMetricDetails({ record, prices, now = Date.now() / 1000 }) {
+  const tokens = record.tokens
+  return jsxs('div', { className: 'mt-2 text-xs break-words', 'data-goal-metrics': record.id, children: [
+    jsx('p', { children: `Profil: ${record.profile} · Modell: ${record.model || 'nicht verfügbar'} · Provider: ${record.provider || 'nicht verfügbar'} · Reasoning: ${record.reasoning === '' ? 'nicht gesetzt' : record.reasoning ?? 'nicht verfügbar'} · Fast: ${record.fast === null ? 'nicht verfügbar' : record.fast ? 'An' : 'Aus'}` }),
+    jsx('p', { children: `Goal: ${record.status} · Start: ${timestamp(record.startedAt)} · ${record.endedAt ? `Ende (beobachtet): ${timestamp(record.endedAt)}` : record.status === 'done' ? 'Ende: nicht verfügbar' : `läuft seit: ${timestamp(record.startedAt)}`} · Gesamtdauer${record.endedAt ? ' (bis beobachtetes Ende)' : ' (inkl. Warte-/Pausenzeit)'}: ${seconds(metricDuration(record, now))}` }),
+    jsx('p', { children: `Tokens · Input: ${number(tokens.input)} · Output: ${number(tokens.output)} · Reasoning (Teilmenge): ${number(tokens.reasoning)} · Cache gelesen: ${number(tokens.cacheRead)} · Cache geschrieben: ${number(tokens.cacheWrite)}` }),
+    jsx('p', { children: `Kosten: ${costText(metricCost(record, prices))}${record.modelChanged ? ' · Modellwechsel: keine Berechnung aus einer einzelnen Modellpreistabelle' : ''}` }),
+    jsx('p', { children: `Letzte Usage-Erfassung: ${timestamp(record.observedAt)}${record.items.length === 1 ? ` · ${record.items[0].repo}#${record.items[0].number}: Laufzeit und Tokens dieses Einzel-Item-Goals` : ' · Pro Item nicht zuordenbar; nur Goal-Summe (keine Aufteilung anhand von Prompts oder Antworten).'}` }),
+  ] })
+}
+export function GoalReceiptMetrics({ receipt, kind }) {
+  const { records, prices, error } = useValue($goalMetrics)
+  const [now, setNow] = useState(() => Date.now() / 1000)
+  useEffect(() => { const timer = setInterval(() => setNow(Date.now() / 1000), 10_000); return () => clearInterval(timer) }, [])
+  if (!receipt?.stored_session_id) return null
+  const matches = records.filter(r => r.session === receipt.stored_session_id && r.profile === receipt.plan.profile && (!kind || r.kind === kind))
+  // Never guess between equal stored ids on different connections.
+  const record = matches.length === 1 ? matches[0] : null
+  return jsxs('section', { 'aria-label': 'Goal-Metriken', children: [
+    record ? jsx(GoalMetricDetails, { record, prices, now }) : jsx('p', { className: 'text-xs', children: 'Goal-Metriken: nicht verfügbar' }),
+    error ? jsx('p', { role: 'alert', className: 'text-xs', children: error }) : null,
+  ] })
+}
+export function downloadMetricsCsv(records, prices, filters) {
+  const blob = new Blob(['\ufeff', metricsCsv(records, prices, filters)], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob), a = document.createElement('a')
+  a.href = url; a.download = 'githermes-goals.csv'; a.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+export function GoalMetricsOverview({ onClose }) {
+  const { records, prices, error } = useValue($goalMetrics)
+  const [profile, setProfile] = useState(''), [model, setModel] = useState(''), [period, setPeriod] = useState('day')
+  const [now, setNow] = useState(() => Date.now() / 1000)
+  useEffect(() => { const timer = setInterval(() => setNow(Date.now() / 1000), 10_000); return () => clearInterval(timer) }, [])
+  const filters = { profile, model }, rows = filterMetrics(records, filters), totals = aggregateMetrics(records, period, prices, filters, now)
+  const select = (label, value, set, options) => jsxs('label', { children: [label, ' ', jsx('select', { 'aria-label': label, value, onChange: e => set(e.target.value), children: options.map(([id, name]) => jsx('option', { value: id, children: name }, id)) })] })
+  return jsxs('section', { 'aria-label': 'Goal-Verbrauchsübersicht', className: 'p-3 overflow-auto', children: [
+    jsx('h3', { children: 'Goal-Verbrauch · lokal gespeichert' }),
+    jsx('p', { className: 'text-xs', children: 'Kumulative Session-Zähler, keine Addition von Snapshots. Null ohne Reporting-Nachweis bleibt nicht verfügbar. Ende ist der beobachtete done-Status, nicht die Handoff-Bestätigung. Zeiträume: UTC, Woche ab Montag; Zuordnung nach Goal-Start. Summen umfassen auch laufende Goals und Warte-/Pausenzeit.' }),
+    jsxs('div', { className: 'flex flex-wrap gap-2 mt-2', children: [
+      select('Profilfilter', profile, setProfile, [['', 'Alle Profile'], ...[...new Set(records.map(r => r.profile))].sort().map(v => [v, v])]),
+      select('Modellfilter', model, setModel, [['', 'Alle Modelle'], ...[...new Set(records.map(r => r.model).filter(Boolean))].sort().map(v => [v, v])]),
+      select('Zeitraum', period, setPeriod, [['day', 'Tag'], ['week', 'Woche'], ['month', 'Monat']]),
+      jsx(Button, { size: 'sm', onClick: () => downloadMetricsCsv(records, prices, filters), children: 'CSV exportieren' }),
+      jsx(Button, { size: 'sm', onClick: () => controller?.refresh(), children: 'Metriken aktualisieren' }),
+      onClose ? jsx(Button, { size: 'sm', onClick: onClose, children: 'Übersicht schließen' }) : null,
+    ] }),
+    error ? jsx('p', { role: 'alert', children: error }) : null,
+    ...totals.map(g => jsxs('div', { className: 'mt-3 text-xs', 'data-metric-period': g.key, children: [
+      jsx('h4', { children: `${g.key} · ${g.goals} Goals` }),
+      jsx('p', { children: `Laufzeit: ${seconds(g.duration)} (${g.durationMissing} nicht verfügbar)` }),
+      jsx('p', { children: `Input: ${number(g.tokens.input)} (${g.missing.input} fehlen) · Output: ${number(g.tokens.output)} (${g.missing.output} fehlen) · Reasoning: ${number(g.tokens.reasoning)} (${g.missing.reasoning} fehlen) · Cache gelesen: ${number(g.tokens.cacheRead)} (${g.missing.cacheRead} fehlen) · Cache geschrieben: ${number(g.tokens.cacheWrite)} (${g.missing.cacheWrite} fehlen)` }),
+      jsx('p', { children: `Kosten${g.estimated ? ' (enthält geschätzte Werte)' : ''}: ${g.cost === null ? 'nicht verfügbar' : `${g.cost.toFixed(8)} USD`} · ${g.costMissing} Goals ohne Kosten · ${g.costPartial} Cache-Teilsummen` }),
+    ] }, g.key)),
+    !rows.length ? jsx('p', { children: 'Noch keine Goals für diesen Filter erfasst.' }) : null,
+    jsx('h4', { className: 'mt-3', children: 'Letzte Goals (neuester Start zuerst)' }),
+    ...rows.map(r => jsxs('article', { className: 'mt-3 border-t', children: [jsx('h5', { children: `${r.kind} · ${r.connection} · ${r.session} · ${r.items.map(i => `${i.repo}#${i.number}`).join(', ')}` }), jsx(GoalMetricDetails, { record: r, prices, now })] }, r.id)),
+  ] })
+}
+export function GoalMetricsSettings() {
+  const { prices } = useValue($goalMetrics)
+  const [draft, setDraft] = useState(() => JSON.stringify(prices, null, 2)), [message, setMessage] = useState('')
+  useEffect(() => { setDraft(JSON.stringify(prices, null, 2)); setMessage('') }, [prices])
+  return jsxs('section', { 'aria-label': 'GitHermes Preistabelle', className: 'p-3', children: [
+    jsx('h3', { children: 'GitHermes · Goal-Kosten' }),
+    jsx('p', { children: 'USD pro Million Tokens. Keine Preise vorgegeben. provider kann leer sein (alle Provider dieses Modells). input, output, cacheRead und cacheWrite sind Zahlen oder null (kein Preis). Datum pro Modell: YYYY-MM-DD. Hermes-Kosten haben Vorrang; Tabellenwerte sind geschätzt. Fehlende Cache-Zähler ergeben nur eine ausdrücklich markierte Teilsumme, keine erfundenen Cache-Kosten.' }),
+    jsx('p', { children: 'Zeilenformat: {"provider":"", "model":"Modell-ID", "date":"YYYY-MM-DD", "input":null, "output":null, "cacheRead":null, "cacheWrite":null}' }),
+    ...prices.rows.map(r => jsx('p', { children: `${r.provider || 'Alle Provider'} · ${r.model} · Preisstand: ${r.date}` }, JSON.stringify([r.provider, r.model]))),
+    jsx('textarea', { 'aria-label': 'Preistabelle JSON', rows: 14, style: { width: '100%' }, value: draft, onChange: e => setDraft(e.target.value) }),
+    jsx(Button, { onClick: () => { try { const value = validatePrices(JSON.parse(draft)); if (!controller) throw new Error('Metrik-Speicher nicht bereit.'); controller.setPrices(value); setDraft(JSON.stringify(value, null, 2)); setMessage('Preistabelle gespeichert.') } catch (e) { setMessage(e.message) } }, children: 'Preistabelle speichern' }),
+    message ? jsx('p', { role: 'status', children: message }) : null,
+  ] })
+}
 
 const ID = 'githermes'
 const PANE_ID = `${ID}:pane`

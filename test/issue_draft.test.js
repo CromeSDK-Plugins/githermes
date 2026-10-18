@@ -14,7 +14,7 @@ import {
   rewriteIssueBody,
   redactIssueSecrets,
   resolveIssueDraftRepo,
-} from '../desktop/issue_draft.js'
+} from '../desktop/plugin.js'
 
 test('repo selection prefers the session repository, accepts an explicit chat repo, and rejects ambiguous input', () => {
   assert.equal(resolveIssueDraftRepo({ sessionRepo: 'owner/session', chatRepo: 'owner/chat' }), 'owner/session')

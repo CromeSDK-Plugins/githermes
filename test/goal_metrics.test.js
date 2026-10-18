@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { metricFromReceipt, updateMetric, usageSnapshot, hermesCost, restoreMetrics, validatePrices, restorePrices, metricCost, metricDuration, aggregateMetrics, metricsCsv, filterMetrics } from '../desktop/goal_metrics.js'
+import { metricFromReceipt, updateMetric, usageSnapshot, hermesCost, restoreMetrics, validatePrices, restorePrices, metricCost, metricDuration, aggregateMetrics, metricsCsv, filterMetrics } from '../desktop/plugin.js'
 
 const receipt = () => ({ stored_session_id: 'stored', session_id: 'runtime', stage: 'complete', plan: { profile: 'worker', prompt: 'SECRET PROMPT', items: [{ repo: 'Example/Repo', number: 12, title: 'SECRET TITLE' }] }, modelReadback: { model: 'model', provider: 'provider', reasoning_effort: 'high', fast: false }, kickoff: 'SECRET RESPONSE' })
 const base = () => metricFromReceipt(receipt(), 'issue', 'local', 'default')

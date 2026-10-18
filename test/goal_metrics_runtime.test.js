@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createMetricsController, noteGoalReceipt } from '../desktop/goal_metrics_runtime.js'
-import { METRICS_KEY, metricFromReceipt } from '../desktop/goal_metrics.js'
+import { createMetricsController, noteGoalReceipt } from '../desktop/plugin.js'
+import { METRICS_KEY, metricFromReceipt } from '../desktop/plugin.js'
 import * as plugin from '../desktop/plugin.js'
 const receipt = (profile = 'worker', id = 'stored') => ({ stored_session_id: id, session_id: 'runtime', plan: { profile, prompt: 'SECRET PROMPT', items: [{ repo: 'example/repo', number: 12, title: 'SECRET TITLE' }] }, stage: 'complete', modelReadback: { model: 'm', provider: 'p', fast: false, reasoning_effort: 'high' } })
 function fixture() {

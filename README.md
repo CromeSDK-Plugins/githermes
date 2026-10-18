@@ -435,6 +435,7 @@ The plugin **id** changed (`github-prs` → `githermes`), so the old install mus
 
 - Disk plugins load **uncompiled**: UI is written with `jsx()`/`jsxs()` calls, no JSX syntax, no build step.
 - Only `@hermes/plugin-sdk`, `react`, and `react/jsx-runtime` are importable.
+- No relative imports: the whole runtime lives in the single file `desktop/plugin.js` (enforced by `test/runtime_imports.test.js`).
 - Tailwind classes must already exist in the app's compiled CSS — arbitrary `var()` bracket forms (`bg-[var(--x)]`) are silently dead at runtime. Use the paren shorthand (`text-(--ui-text-tertiary)`) or scoped `<style>` blocks with real theme variables.
 - Large `gh` payloads go through `shBig` / `shJsonBig` (lowercase **hex**, not base64, in 3,800-character chunks under the 4,000-character gateway stdout cap). Single-repo lists start at 30 rows and grow on demand up to 120; combined lists use 50-row owner cursors and explicit Search-limit warnings, not that 120-row cap. Repository discovery is paginated without a list cap. Large GraphQL request bodies are chunked into a temporary file and passed on stdin (`gh api graphql --input -`) so Windows command/path limits do not truncate queries.
 
