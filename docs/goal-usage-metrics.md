@@ -1,6 +1,6 @@
 # Goal usage metrics
 
-Settings contribution compatibility: the supported Desktop SDK path is `ctx.registerSettingsPage(...)` (audited in Hermes `apps/desktop/src/contrib/plugin.ts:118–121,362` and `contrib/settings-pages.ts:31–33,46–59`). `settings.plugins` is the area identifier consumed by that dedicated API, not a generic contribution fallback; GitHermes now feature-detects `registerSettingsPage` and does not register a generic contribution when it is absent. (#12)
+Settings contribution compatibility: the supported Desktop SDK path is `ctx.registerSettingsPage(...)` (audited in Hermes `apps/desktop/src/contrib/plugin.ts:118–121,362` and `contrib/settings-pages.ts:31–33,46–59`). `settings.plugins` is the area identifier consumed by that dedicated API, not a generic contribution fallback; GitHermes now feature-detects `registerSettingsPage` and does not register a generic contribution when it is absent. A missing method logs one console warning and does not stop the rest of the plugin from loading. (#12, #34)
 
 Open **Goal-Verbrauch** in the pane/page or **GitHub: Goal-Verbrauch** in the command palette. Issue queues, PR review/merge queues and individual **Fix failing checks** Goals share the recorder and show their metrics beside the handoff status. The overview survives clearing a queue or restarting Desktop. It filters by profile/model and exports the filtered Goal rows as CSV.
 
