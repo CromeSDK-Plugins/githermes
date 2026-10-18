@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildFinalizeQuery, decodeFinalizeResponse, deriveFinalizeRow, finalizeMarkdown, finalizePollInterval, FINALIZE_STATES } from '../desktop/finalize.js'
+import { buildFinalizeQuery, decodeFinalizeResponse, deriveFinalizeRow, finalizeMarkdown, finalizePollInterval, FINALIZE_STATES } from '../desktop/plugin.js'
 
 const item = (number = 1) => ({ repo: 'acme/app', number, title: `Issue ${number}` })
 const issue = (number, { state = 'OPEN', prs = [] } = {}) => ({ data: { i0: { issue: {

@@ -16,7 +16,8 @@ const { build } = require('esbuild'), { chromium } = require('playwright')
 const work = join(process.env.TMPDIR, 'githermes12-ui-evidence')
 mkdirSync(work, { recursive: true })
 const shim = join(work, 'sdk.mjs')
-writeFileSync(shim, `import React, { useSyncExternalStore } from ${JSON.stringify(require.resolve('react'))};
+writeFileSync(shim, `export * from ${JSON.stringify(join(root, 'node_modules/@hermes/plugin-sdk/index.js'))};
+import React, { useSyncExternalStore } from ${JSON.stringify(require.resolve('react'))};
 export const atom = initial => { let value = initial; const listeners = new Set(); return { get: () => value, set: next => { value = next; listeners.forEach(fn => fn()) }, subscribe: fn => { listeners.add(fn); return () => listeners.delete(fn) } } };
 export const useValue = store => useSyncExternalStore(store.subscribe, store.get);
 export const Button = ({children, size, variant, ...props}) => React.createElement('button', props, children);
@@ -24,8 +25,8 @@ export const Button = ({children, size, variant, ...props}) => React.createEleme
 const entry = join(work, 'entry.mjs')
 writeFileSync(entry, `import React from ${JSON.stringify(require.resolve('react'))};
 import { createRoot } from ${JSON.stringify(require.resolve('react-dom/client'))};
-import { $goalMetrics, GoalMetricsOverview, GoalMetricsSettings, setMetricsController } from ${JSON.stringify(join(root, 'desktop/goal_metrics_ui.js'))};
-import { createMetricsController } from ${JSON.stringify(join(root, 'desktop/goal_metrics_runtime.js'))};
+import { $goalMetrics, GoalMetricsOverview, GoalMetricsSettings, setMetricsController } from ${JSON.stringify(join(root, 'desktop/plugin.js'))};
+import { createMetricsController } from ${JSON.stringify(join(root, 'desktop/plugin.js'))};
 const storage = { get: (key, fallback) => JSON.parse(localStorage.getItem(key) || 'null') ?? fallback, set: (key, value) => localStorage.setItem(key, JSON.stringify(value)) };
 let done = false;
 const api = { state: { profile: { get: () => 'default' }, connectionId: { get: () => 'local' } }, requestProfile: async (route, method, params) => {
