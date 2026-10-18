@@ -102,6 +102,7 @@ function transportFixture() {
   calls.push([method, params])
   if (method === 'session.create') return { session_id: 'runtime', stored_session_id: `stored-${calls.length}` }
   if (method === 'session.title') return {}
+  if (method === 'session.control.read') return { control: { goal: objective ? { title: objective, status: 'active' } : null } }
   if (method === 'command.dispatch' && params.arg.startsWith('-- ')) { objective = plugin.queueGoalObjective({ prompt: params.arg.slice(3) }); return { type: 'send', message: objective } }
   if (method === 'command.dispatch' && params.arg === 'show') return { type: 'exec', output: `Goal (active): ${objective}` }
   if (method === 'prompt.submit') return { status: 'ok' }
@@ -123,7 +124,7 @@ test('every option change alters the durable fingerprint and submits exactly the
   assert.equal(receipt.stage, 'complete')
  }
  assert.equal(f.calls.filter(([method]) => method === 'session.create').length, plans.length)
- assert.ok(f.calls.every(([method]) => ['session.create', 'session.title', 'command.dispatch', 'prompt.submit'].includes(method)))
+ assert.ok(f.calls.every(([method]) => ['session.create', 'session.title', 'command.dispatch', 'session.control.read', 'prompt.submit'].includes(method)))
 })
 
 test('changed prompt policy cannot replace an unfinished Goal receipt or create a second session', async () => {

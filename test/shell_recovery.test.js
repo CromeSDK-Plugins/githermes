@@ -5,8 +5,9 @@ const source = readFileSync(process.env.GITHERMES_BASELINE || new URL('../deskto
 const classifierStart = source.indexOf('export function classifyGhError(')
 const classifierSource = source.slice(classifierStart, source.indexOf('\n}', classifierStart) + 2).replace('export ', '')
 const classifyGhError = new Function(`${classifierSource}; return classifyGhError`)()
-const transportSource = source.slice(source.indexOf('let bashPath = null'), source.indexOf('async function postIssueComment'))
-const makeTransport = new Function('host', 'POSIX_SHELL', `${transportSource}; return { shellCommand, sh, resolveBash }`)
+const transportStart = source.indexOf(source.includes('const shellContexts = new WeakMap()') ? 'const shellContexts = new WeakMap()' : 'let bashPath = null')
+const transportSource = source.slice(transportStart, source.indexOf('async function postIssueComment'))
+const makeTransport = (host, clientPosix) => new Function('host', 'POSIX_SHELL', 'POSIX_PATH', `${transportSource}; return { shellCommand, sh, resolveBash }`)(host, clientPosix, 'export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"; ')
 const result = stdout => ({ stdout, stderr: '', code: stdout ? 0 : 1 })
 function fixture({ git = '', bash = '', defaults = '', found = [], reject } = {}) {
   const calls = []
@@ -79,13 +80,114 @@ test('host rejection is not replaced with plugin missing-Bash and can be retried
   await assert.rejects(f.shellCommand('gh --version'), e => e === error)
   assert.equal(f.calls.length, 2)
 })
-test('POSIX commands remain unchanged without Windows discovery', async () => {
-  const f = makeTransport({ request: () => { throw new Error('unexpected probe') } }, true)
-  assert.equal(await f.shellCommand("gh api 'user/repos' | wc -c"), "gh api 'user/repos' | wc -c")
+test('POSIX backend is detected before commands run, regardless of client platform', async () => {
+  const calls = []
+  const f = makeTransport({ request: (method, { command }) => {
+    calls.push(command)
+    assert.equal(command, 'echo GITHERMES_SHELL_%OS%')
+    return result('GITHERMES_SHELL_%OS%\n')
+  } }, true)
+  assert.equal(await f.shellCommand("gh api 'user/repos' | wc -c"), 'export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"; gh api \'user/repos\' | wc -c')
+  assert.equal(calls.length, 1)
+})
+
+function routedFixture(routes, clientPosix = false) {
+  const calls = []
+  let active = Object.keys(routes)[0]
+  const gateways = Object.fromEntries(Object.entries(routes).map(([id, options]) => [id, {
+    request: async (method, { command }) => {
+      assert.equal(method, 'shell.exec')
+      calls.push({ id, command })
+      if (options.run) return options.run(command, () => { active = options.switchTo })
+      if (command === 'echo GITHERMES_SHELL_%OS%') {
+        if (options.switchTo) active = options.switchTo
+        return result(options.bash ? 'GITHERMES_SHELL_Windows_NT\r\n' : 'GITHERMES_SHELL_%OS%\n')
+      }
+      if (command === 'where git' || command === 'where bash') return result('')
+      if (command.includes('%ProgramFiles%')) return result(`"${options.bash}"\r\n`)
+      if (command === `"${options.bash}" -c "uname -s"`) return result('MINGW64_NT-10.0\r\n')
+      if (options.bash && !command.startsWith(`"${options.bash}" -l -c`)) throw new Error(`POSIX command sent directly to Windows ${id}`)
+      if (!options.bash && /bash\.exe/i.test(command)) throw new Error(`Windows command sent to POSIX ${id}`)
+      return result(id)
+    },
+  }]))
+  const host = {
+    state: { connectionId: { get: () => active }, profile: { get: () => 'default' }, gateway: { get: () => 'connected' } },
+    getGateway: () => gateways[active],
+    request: (...args) => gateways[active].request(...args),
+  }
+  return { host, calls, select: id => { active = id }, ...makeTransport(host, clientPosix) }
+}
+
+test('a POSIX desktop uses the Windows gateway shell instead of its own OS', async () => {
+  const f = routedFixture({ windows: { bash: 'C:\\Program Files\\Git\\bin\\bash.exe' } }, true)
+  assert.equal(await f.sh('printf backend'), 'windows')
+  assert.ok(f.calls.some(({ command }) => command === 'echo GITHERMES_SHELL_%OS%'))
+})
+
+test('shell discovery follows Windows and Linux gateway switches in both directions', async () => {
+  const f = routedFixture({ windows: { bash: 'C:\\Program Files\\Git\\bin\\bash.exe' }, linux: {} })
+  assert.equal(await f.sh('printf backend'), 'windows')
+  f.select('linux')
+  assert.equal(await f.sh('printf backend'), 'linux')
+  f.select('windows')
+  assert.equal(await f.sh('printf backend'), 'windows')
+  assert.ok(f.calls.some(({ id, command }) => id === 'linux' && command === 'echo GITHERMES_SHELL_%OS%'))
+})
+
+test('different Windows gateways do not share a discovered Git Bash path', async () => {
+  const f = routedFixture({ first: { bash: 'C:\\Program Files\\Git\\bin\\bash.exe' }, second: { bash: 'D:\\PortableGit\\bin\\bash.exe' } })
+  assert.equal(await f.sh('printf backend'), 'first')
+  f.select('second')
+  assert.equal(await f.sh('printf backend'), 'second')
+})
+
+test('one command keeps its gateway when focus changes during discovery', async () => {
+  const f = routedFixture({ first: { bash: 'C:\\Program Files\\Git\\bin\\bash.exe', switchTo: 'second' }, second: {} })
+  assert.equal(await f.sh('printf backend'), 'first')
+  assert.ok(f.calls.every(({ id }) => id === 'first'))
+  assert.equal(await f.sh('printf backend'), 'second')
+})
+
+test('legacy SDK refuses a route switch during a command instead of using the new host', async () => {
+  const f = routedFixture({ first: { bash: 'C:\\Program Files\\Git\\bin\\bash.exe', switchTo: 'second' }, second: {} })
+  delete f.host.getGateway
+  await assert.rejects(f.sh('printf backend'), /gateway|connection|route|changed/i)
+  assert.ok(f.calls.every(({ id }) => id === 'first'), 'no follow-up RPC may reach the new host')
+})
+
+test('a reused gateway object reprobes when its connection or profile changes', async () => {
+  let connection = 'one', profile = 'default', probes = 0
+  const gateway = { request: async (method, { command }) => {
+    if (command === 'echo GITHERMES_SHELL_%OS%') { probes++; return result('GITHERMES_SHELL_%OS%\n') }
+    return result(`${connection}/${profile}`)
+  } }
+  const host = { getGateway: () => gateway, request: gateway.request, state: { connectionId: { get: () => connection }, profile: { get: () => profile } } }
+  const f = makeTransport(host, false)
+  assert.equal(await f.sh('printf backend'), 'one/default')
+  profile = 'worker'
+  assert.equal(await f.sh('printf backend'), 'one/worker')
+  connection = 'two'
+  assert.equal(await f.sh('printf backend'), 'two/worker')
+  assert.equal(probes, 3)
+})
+
+test('large reads keep creation, payload, chunks and cleanup on their owning gateway', async () => {
+  const f = routedFixture({ first: { switchTo: 'second', run: (command, change) => {
+    if (command === 'echo GITHERMES_SHELL_%OS%') return result('GITHERMES_SHELL_%OS%\n')
+    if (command.includes('mktemp -d')) { change(); return result('/tmp/ghprs.first') }
+    if (command.includes('wc -c')) return result('10')
+    if (command.includes('tail -c')) return result('68656c6c6f')
+    return { code: 0, stdout: '', stderr: '' }
+  } }, second: { run: () => { throw new Error('A chunk or cleanup crossed into the newly focused gateway') } } })
+  const code = source.slice(transportStart, source.indexOf('async function ghApiBig(')).replace(/^export /gm, '')
+  const api = new Function('host', 'POSIX_SHELL', 'sq', 'POSIX_PATH', `${code}; return { shBig }`)(f.host, false, value => `'${String(value).replace(/'/g, `'\\''`)}'`, 'export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"; ')
+  assert.equal(await api.shBig('printf hello'), 'hello')
+  assert.ok(f.calls.every(({ id }) => id === 'first'))
+  assert.ok(f.calls.some(({ command }) => command.includes('rmdir')))
 })
 test('Windows client with a Linux shell.exec backend does not require Git Bash', async () => {
-  // POSIX_SHELL false is the Windows Desktop decision (navigator.platform / userAgent).
-  // shell.exec here is the remote Linux gateway: /bin/sh does not expand %OS%.
+  // The legacy Desktop flag is deliberately false; only the backend probe counts.
   const calls = []
   const host = { request: async (method, { command }) => {
     assert.equal(method, 'shell.exec')
@@ -96,7 +198,7 @@ test('Windows client with a Linux shell.exec backend does not require Git Bash',
     throw new Error(`data command ran: ${command}`)
   } }
   const f = makeTransport(host, false)
-  assert.equal(await f.shellCommand('gh repo view CromeSDK/hermes-auto-reasoning'), 'gh repo view CromeSDK/hermes-auto-reasoning')
+  assert.equal(await f.shellCommand('gh repo view CromeSDK/hermes-auto-reasoning'), 'export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"; gh repo view CromeSDK/hermes-auto-reasoning')
   assert.deepEqual(calls, ['echo GITHERMES_SHELL_%OS%'])
 })
 test('missing Bash, Windows missing gh and auth have concrete recovery steps', () => {

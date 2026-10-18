@@ -21,6 +21,7 @@ test('native Goal start creates one profiled session, persists the Goal before k
   calls.push([m, p])
   if (m === 'session.create') return { session_id: 'runtime-test', stored_session_id: 'stored-test' }
   if (m === 'session.title') return {}
+  if (m === 'session.control.read') return { control: { goal: prompt ? { title: prompt, status: 'active' } : null } }
   if (m === 'command.dispatch' && p.arg.startsWith('-- ')) { prompt = plugin.queueGoalObjective({ prompt: p.arg.slice(3) }); return { type: 'send', message: prompt, notice: 'Goal set' } }
   if (m === 'command.dispatch' && p.arg === 'show') return { type: 'exec', output: `Goal (active): ${prompt}` }
   if (m === 'prompt.submit') return { status: 'ok' }
@@ -54,6 +55,7 @@ function fixture() {
   if (method === 'session.create') return { session_id: 'runtime', stored_session_id: 'stored' }
   if (method === 'session.resume') return { session_id: 'resumed', stored_session_id: 'stored' }
   if (method === 'session.title') return {}
+  if (method === 'session.control.read') return { control: { goal: state.prompt ? { title: state.prompt, status: 'active' } : null } }
   if (method === 'command.dispatch') {
    if (params.arg === 'show') return { type: 'exec', output: state.prompt ? `Goal (active): ${state.prompt}` : 'No active goal. Set one with /goal <text>.' }
    if (params.arg === 'resume') return { type: 'send', message: 'native continuation prompt' }

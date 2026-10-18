@@ -14,15 +14,16 @@ test('shell: every gh/hermes invocation resolves the binary per platform', () =>
   // stdout, which is worse than a visible failure.
   assert.ok(!source.includes("const GH = 'PATH="), 'GH must not hardcode a POSIX PATH prefix')
   assert.ok(!source.includes("const HERMES = 'PATH="), 'HERMES must not hardcode a POSIX PATH prefix')
-  assert.ok(source.includes('const POSIX_SHELL ='), 'platform detection is missing')
-  assert.ok(source.includes('${POSIX_SHELL ? POSIX_PATH : \'\'}gh'), 'GH must be platform-gated')
-  assert.ok(source.includes('${POSIX_SHELL ? POSIX_PATH : \'\'}hermes'), 'HERMES must be platform-gated')
+  assert.ok(source.includes("const GH = 'gh'"), 'CLI selection must not use the desktop OS')
+  assert.ok(source.includes("const HERMES = 'hermes'"), 'CLI selection must not use the desktop OS')
+  assert.doesNotMatch(source, /const POSIX_SHELL =/, 'navigator cannot identify the remote gateway shell')
+  assert.match(source, /const POSIX_PATH = 'export PATH=/, 'POSIX tools and their child processes must inherit the same PATH')
 })
 
 test('shell: every shell.exec goes through the shellCommand wrapper', () => {
   // A raw `host.request('shell.exec', { command: cmd })` call site bypasses the
   // Windows bash hop and reintroduces the cmd.exe bug for that one query.
-  const calls = source.split('\n').filter(line => line.includes("host.request('shell.exec', { command:"))
+  const calls = source.split('\n').filter(line => line.includes(".request('shell.exec', { command:"))
   assert.ok(calls.length >= 4, 'expected the wrapper callers, the where-git probe and the bash probe')
   for (const call of calls) {
     const ok =
@@ -59,8 +60,8 @@ test('shell: Windows routes through Git bash, not WSL bash', () => {
   assert.ok(!/const BASH = '[A-Z]:/.test(source), 'bash path must not be hardcoded to a drive letter')
   // The first command must wait for the Git-for-Windows probe; it must never
   // race into bare `bash` and accidentally launch System32's WSL shim.
-  assert.ok(source.includes('let bashReady = null'), 'bash resolution must be shared')
-  assert.ok(source.includes('await resolveBash()'), 'shell commands must await bash resolution')
+  assert.ok(source.includes('const shellContexts = new WeakMap()'), 'bash discovery must be scoped to gateway identity')
+  assert.ok(source.includes('await resolveBash(context)'), 'shell commands must await their own gateway discovery')
   assert.ok(source.includes("Git for Windows bash.exe was not found"), 'missing Git Bash needs a clear recovery error')
 })
 

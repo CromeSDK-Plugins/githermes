@@ -157,7 +157,8 @@ test('preview retains queue order and explicit skip, blocked and conditional-fix
 })
 test('review and all 24 merge policies use ordered native model contract without widened permissions', () => {
  const d = selected(), review = p.buildPrQueueGoalPlan(d)
- assert.match(review.prompt, /nur kommentieren; gh pr review --comment/)
+ assert.match(review.prompt, /nur kommentieren.*COMMENT/)
+ assert.match(review.prompt, /gh api --method POST repos\/OWNER\/REPO\/pulls\/N\/reviews --input/)
  assert.match(review.prompt, /Nicht mergen, nicht rebasen/)
  assert.match(review.prompt, /Review-Threads/)
  assert.match(review.prompt, /commit_id/)
@@ -184,6 +185,7 @@ function goalFixture() {
   if (method === 'session.create') return { session_id: 'runtime', stored_session_id: `stored-${calls.length}` }
   if (method === 'session.resume') return { session_id: 'runtime' }
   if (method === 'session.title') return {}
+  if (method === 'session.control.read') return { control: { goal: state.objective ? { title: state.objective, status: 'active' } : null } }
   if (method === 'command.dispatch') {
    if (args.arg === 'show') return { type: 'exec', output: `Goal (active): ${state.objective}` }
    if (args.arg === 'resume') return { type: 'send', message: 'native continuation' }

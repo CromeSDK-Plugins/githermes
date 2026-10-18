@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/CromeSDK-Plugins/githermes/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/CromeSDK-Plugins/githermes/actions/workflows/ci.yml)
 
-GitHermes **0.6.5** — [CromeSDK-Plugins/githermes](https://github.com/CromeSDK-Plugins/githermes).
+GitHermes **0.6.6** — [CromeSDK-Plugins/githermes](https://github.com/CromeSDK-Plugins/githermes).
 
 GitHub PRs & Issues as a right workspace pane in [Hermes Desktop](https://hermes-agent.nousresearch.com/docs/user-guide/desktop).
 
@@ -50,9 +50,15 @@ A single-file desktop plugin (`@hermes/plugin-sdk`) that shows your repository's
 The SDK/gateway contract is audited against **Hermes Desktop v0.21.7+9**,
 commit `41cd7b649d0980`. Automated transport tests ran on Windows 11 through
 real `cmd.exe` → Git Bash; this is **not** a live Desktop-tested minimum.
+The current implementation was also verified through the unmodified shell.exec
+handler from installed Hermes **0.22.2**, commit `d923a5eb487a`, on Windows,
+including its subprocess environment, approval checks, redaction and output cap.
+These handler checks are not a live Desktop interaction or model-turn test.
 Linux/macOS Desktop loading and interactions remain unverified.
 
-Git Bash discovery runs only after `shell.exec` expands `%OS%` the way `cmd.exe` does. A POSIX shell that leaves the probe token unexpanded is used directly. Otherwise GitHermes checks every `where git` result (including portable Git),
+Shell discovery is scoped to the connected gateway and profile, independent of the
+Desktop operating system. Commands, uploads, chunk reads and cleanup keep the same
+gateway even if another tab changes the active connection. Git Bash discovery runs only after `shell.exec` expands `%OS%` the way `cmd.exe` does. A POSIX shell that leaves the probe token unexpanded is used directly. Otherwise GitHermes checks every `where git` result (including portable Git),
 `%ProgramFiles%\Git\bin\bash.exe` / `usr\bin\bash.exe`,
 `%ProgramFiles(x86)%\Git\bin\bash.exe`,
 `%LOCALAPPDATA%\Programs\Git\bin\bash.exe` / `usr\bin\bash.exe`,
@@ -83,6 +89,34 @@ The current large-output/comment transport still requires POSIX utilities,
 safely through cmd.exe. Removing these without a documented shell-neutral
 transport would break large PRs/comments. Native cmd/PowerShell-only operation
 without Git Bash is therefore **not supported** by this plugin.
+
+### Command and handoff recovery
+
+GitHermes 0.6.6 sends issue, comment and PR-body JSON through stdin. This avoids
+Windows command-length limits and native `gh.exe` misreading POSIX temporary
+paths when Hermes disables MSYS path conversion. Check lists use the same
+chunked output transport, including failing and pending check exit codes.
+Bot rebase requests use valid paginated CLI calls; a checked Renovate rebase
+checkbox is treated as an outstanding request and is not toggled again.
+
+A confirmed issue creation is recorded before readback. An ambiguous result
+keeps **Anlegen** disabled across pane reloads. **Ergebnis erneut prüfen** only
+reads the accepted issue or searches for the exact submitted draft, including
+closed issues. Definite HTTP rejections unlock the draft; timeouts and server
+errors do not silently create a second issue.
+
+Queue and bot-assignment handoffs retain their owning connection and profile.
+An unconfirmed session creation or kickoff is never blindly repeated. Queue
+Goals are verified against the exact active native objective. Existing 0.6.5
+Fix history remains available; an old completed head cannot start another run,
+but a new head can. Old handoffs without recorded ownership must be inspected
+in their original Hermes session before proceeding.
+
+Generated work instructions use the executing backend's actual tools, shell
+and checkout. Exact-head reviews use the GitHub Reviews API with `commit_id`.
+A billing or spending limit that prevents a CI job from starting is reported
+separately while other checks continue; it never authorizes bypassing a required
+check. Queue Stop/Skip settings keep their existing meaning and defaults.
 
 ### Repository access
 

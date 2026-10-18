@@ -19,6 +19,7 @@ function fixture(options={model,reasoning:'high',fast:'off'}) {
     if(m==='session.resume')return {session_id:'runtime-'+count,info:{model:chosen.model||catalog.model,provider:chosen.provider||catalog.provider}}
     if(m==='config.get')return {value:flags.settingsMismatch?'wrong':a.key==='reasoning'?chosen.reasoning_effort:chosen.fast?'fast':'normal'}
     if(m==='session.title')return {}
+    if(m==='session.control.read')return {control:{goal:objective?{title:objective,status:'active'}:null}}
     if(m==='command.dispatch'){
       if(a.arg==='show')return {type:'exec',output:objective?'Goal (active): '+objective:'No active goal.'}
       if(a.arg==='resume')return {type:'send',message:objective}

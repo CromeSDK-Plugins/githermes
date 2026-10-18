@@ -21,6 +21,7 @@ function fixture(kind='issue', options={model,reasoning:'high',fast:'off'}) {
   if(m==='session.resume') return {session_id:'resumed',stored_session_id:'stored',info:{model:flags.resumeMismatch?'wrong':chosen.model||catalog().model,provider:chosen.provider}}
   if(m==='config.get') return {value:flags[a.key+'Mismatch']?'wrong':a.key==='reasoning'?chosen.reasoning_effort:chosen.fast?'fast':'normal'}
   if(m==='session.title')return {}
+  if(m==='session.control.read')return {control:{goal:prompt?{title:prompt,status:'active'}:null}}
   if(m==='command.dispatch'){if(a.arg==='show')return {type:'exec',output:`Goal (active): ${prompt}`};prompt=p.queueGoalObjective({prompt:a.arg.slice(3)});return {type:'send',message:prompt}}
   if(m==='prompt.submit'){if(flags.reject){flags.reject=false;throw Object.assign(new Error('definite rejection'),{code:4004})}return {status:'ok'}}
   throw Error(m)
