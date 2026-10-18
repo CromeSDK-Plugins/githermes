@@ -9,11 +9,12 @@ test('shell fixture relocation preserves Ubuntu payload and CLI paths already un
     `cat '${root}/payload.json' > '${root}/ghprs.sample.raw'; node '${root}/fixture.mjs' < '${root}/ghaggregate.sample'`)
 })
 
-test('shell fixture relocation handles Windows runner scripts and transport cleanup', () => {
+test('shell fixture relocation leaves mktemp runner paths alone and moves transport cleanup', () => {
   const root = '/c/Users/runner/fixture'
-  const command = `base64 -d > /tmp/gt$$.sh; bash /tmp/gt$$.sh; unlink /tmp/gt$$.sh; unlink '/tmp/ghprs.sample.hex'`
+  const command = 'set -f; IFS=; f=$(mktemp ${TMPDIR:-/tmp}/gt.XXXXXX) || exit 1; trap \'unlink $f\' EXIT INT TERM; base64 -d > $f; bash $f; unlink \'/tmp/ghprs.sample.hex\''
+  assert.equal(command.includes('gt$$'), false)
   assert.equal(relocateShellArtifacts(command, root),
-    `base64 -d > ${root}/gt$$.sh; bash ${root}/gt$$.sh; unlink ${root}/gt$$.sh; unlink '${root}/ghprs.sample.hex'`)
+    'set -f; IFS=; f=$(mktemp ${TMPDIR:-/tmp}/gt.XXXXXX) || exit 1; trap \'unlink $f\' EXIT INT TERM; base64 -d > $f; bash $f; unlink \'' + root + '/ghprs.sample.hex\'')
 })
 
 test('shell fixture relocation is idempotent and leaves unrelated /tmp paths unchanged', () => {
