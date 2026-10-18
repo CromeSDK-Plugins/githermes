@@ -35,12 +35,16 @@ test('shell: every shell.exec goes through the shellCommand wrapper', () => {
     assert.ok(ok, `unwrapped shell.exec call site: ${call}`)
   }
   // cmd.exe parses the whole command string (no \" handling; |>&^% are live), so user
-  // text may only cross it as base64; bash decodes to a $$-unique script and runs it.
+  // text may only cross it as base64. bash decodes into an mktemp file and removes
+  // it with unlink; inner double quotes would break cmd.exe argv quoting.
   assert.ok(!source.includes('echo ${cmd}'), 'raw command text must not cross cmd.exe')
-  assert.ok(
-    source.includes('| base64 -d > /tmp/gt$$.sh; bash /tmp/gt$$.sh; e=$?; unlink /tmp/gt$$.sh; exit $e'),
-    'Windows commands must decode from base64 inside bash with per-invocation state',
-  )
+  assert.doesNotMatch(source, /gt\$\$/, 'predictable PID temp names must not remain')
+  const runnerLine = source.split('\n').find(line => line.includes(' -c "') && line.includes('base64 -d'))
+  assert.ok(runnerLine, 'shellCommand runner line missing')
+  assert.doesNotMatch(runnerLine, /base64 -d \| bash/, 'decoded output must not be piped into a shell')
+  assert.match(runnerLine, /mktemp \\\$\{TMPDIR:-\/tmp\}\/gt\.XXXXXX/, 'temp scripts must be created with mktemp')
+  assert.match(runnerLine, /trap 'unlink \$f 2>\/dev\/null \|\| true' EXIT INT TERM/, 'cleanup must be an unlink trap, including on error')
+  assert.match(runnerLine, /chmod 600 \$f/, 'temp scripts must be mode 600')
 })
 
 test('shell: Windows routes through Git bash, not WSL bash', () => {

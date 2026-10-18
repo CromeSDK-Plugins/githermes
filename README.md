@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/CromeSDK-Plugins/githermes/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/CromeSDK-Plugins/githermes/actions/workflows/ci.yml)
 
-GitHermes **0.6.1** — [CromeSDK-Plugins/githermes](https://github.com/CromeSDK-Plugins/githermes).
+GitHermes **0.6.2** — [CromeSDK-Plugins/githermes](https://github.com/CromeSDK-Plugins/githermes).
 
 GitHub PRs & Issues as a right workspace pane in [Hermes Desktop](https://hermes-agent.nousresearch.com/docs/user-guide/desktop).
 

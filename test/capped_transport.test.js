@@ -24,7 +24,7 @@ test('shBig/shJsonBig survive the gateway cap through the real platform shell', 
   const host = { request: async (method, { command }) => {
     assert.equal(method, 'shell.exec')
     // Keep all payload/runner artifacts in the task-owned fixture, not /tmp.
-    if (command.includes('base64 -d > /tmp/gt$$.sh')) {
+    if (command.includes('mktemp ') && command.includes('| base64 -d >')) {
       const match = command.match(/echo ([A-Za-z0-9+/=]+) \| tr/)
       const decoded = relocateShellArtifacts(Buffer.from(match[1], 'base64').toString('utf8'), posixRoot)
       command = relocateShellArtifacts(command.replace(match[1], Buffer.from(decoded).toString('base64')), posixRoot)
