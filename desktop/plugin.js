@@ -49,7 +49,17 @@ import { jsx, jsxs, Fragment } from 'react/jsx-runtime'
 /** Numeric/metadata-only Goal accounting. No transcript parsing or snapshot addition. */
 export const METRICS_KEY = 'goalUsageMetricsV1'
 export const PRICES_KEY = 'goalUsagePricesV1'
-export const TOKEN_KEYS = ['input', 'output', 'reasoning', 'cacheRead', 'cacheWrite']
+/** Canonical counter, then the raw usage fields that observe it, in check order.
+ * TOKEN_KEYS and the numeric observation scan are projections of this table. */
+export const TOKEN_FIELDS = [
+  ['input', 'input', 'input_tokens'],
+  ['output', 'output', 'output_tokens'],
+  ['reasoning', 'reasoning', 'reasoning_tokens'],
+  ['cacheRead', 'cache_read', 'cache_read_tokens'],
+  ['cacheWrite', 'cache_write', 'cache_write_tokens'],
+]
+export const TOKEN_KEYS = TOKEN_FIELDS.map(([key]) => key)
+const RAW_TOKEN_KEYS = TOKEN_FIELDS.flatMap(([, ...raw]) => raw)
 const text = value => typeof value === 'string' && value.length <= 256 && !/[\r\n\x00-\x1f]/.test(value) ? value : ''
 const positive = value => typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
 const count = value => Number.isSafeInteger(value) && value > 0 ? value : null
@@ -78,11 +88,7 @@ export function metricFromReceipt(receipt, kind, connection = 'local', ownerProf
 export function usageSnapshot(payload) {
   const u = payload?.usage && typeof payload.usage === 'object' ? payload.usage : payload || {}
   const pick = (...keys) => { for (const key of keys) { const n = count(u[key]); if (n !== null) return n } return null }
-  return {
-    input: pick('input', 'input_tokens'), output: pick('output', 'output_tokens'),
-    reasoning: pick('reasoning', 'reasoning_tokens'), cacheRead: pick('cache_read', 'cache_read_tokens'),
-    cacheWrite: pick('cache_write', 'cache_write_tokens'),
-  }
+  return Object.fromEntries(TOKEN_FIELDS.map(([key, ...raw]) => [key, pick(...raw)]))
 }
 
 export function hermesCost(payload) {
@@ -112,7 +118,7 @@ export function updateMetric(record, { usage, control, info, now = Date.now() / 
     // snapshot carries no new observation and must not erase recorded totals.
     const rawUsage = usage?.usage && typeof usage.usage === 'object' ? usage.usage : usage
     const hasTokenObservation = TOKEN_KEYS.some(key => snapshot[key] !== null) ||
-      ['input', 'input_tokens', 'output', 'output_tokens', 'reasoning', 'reasoning_tokens', 'cache_read', 'cache_read_tokens', 'cache_write', 'cache_write_tokens'].some(key => typeof rawUsage?.[key] === 'number')
+      RAW_TOKEN_KEYS.some(key => typeof rawUsage?.[key] === 'number')
     const reportedCost = hermesCost(usage)
     if (hasTokenObservation || reportedCost) {
       next.tokens = snapshot
@@ -6416,6 +6422,8 @@ function GithubPage() {
   })
 }
 
+let missingSettingsPageLogged = false
+
 export default {
   id: ID,
   name: 'GitHermes',
@@ -6429,7 +6437,13 @@ export default {
     void metrics.refresh()
     // The SDK's registerSettingsPage contribution is the supported Settings API;
     // generic contributions in settings.plugins are not a documented fallback.
-    ctx.registerSettingsPage?.({ id: 'goal-metrics', title: 'GitHermes', render: () => jsx(GoalMetricsSettings, {}) })
+    // PluginContext has no log method; warn once so a missing API is visible.
+    if (ctx.registerSettingsPage == null) {
+      if (!missingSettingsPageLogged) {
+        missingSettingsPageLogged = true
+        console.warn('GitHermes: ctx.registerSettingsPage is unavailable; the GitHermes settings page was not registered.')
+      }
+    } else ctx.registerSettingsPage({ id: 'goal-metrics', title: 'GitHermes', render: () => jsx(GoalMetricsSettings, {}) })
     ctx.register({ id: 'palette-goal-metrics', area: PALETTE_AREA, data: {
       id: 'githermes.goal-metrics', label: 'GitHub: Goal-Verbrauch', keywords: ['github', 'goal', 'tokens', 'cost', 'usage'],
       run: () => { $showGoalMetrics.set(true); openGithubPane() },

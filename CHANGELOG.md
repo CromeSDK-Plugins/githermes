@@ -11,6 +11,8 @@ All notable changes to GitHermes are documented in this file. Format based on [K
 - **BREAKING:** Removed the generic `settings.plugins` contribution fallback for the Goal metrics settings page. GitHermes now registers it only via `ctx.registerSettingsPage(...)`; on Hermes Desktop hosts without that API the **GitHermes** settings page no longer appears (the **GitHub: Goal-Verbrauch** palette entry and pane remain available) (#29, c65aaea, Refs #28).
 
 ### Fixed
+- Goal metrics token counters and the numeric observation check share one field table, so the raw usage aliases cannot drift from `TOKEN_KEYS` (#34).
+- A Hermes host without `ctx.registerSettingsPage` logs one warning instead of skipping the GitHermes settings page silently. The rest of the plugin still loads (#34).
 - The Windows shell runner creates its temp script with `mktemp` (`${TMPDIR:-/tmp}/gt.XXXXXX`, mode 600) and removes it with an `unlink` trap on EXIT, INT, and TERM, instead of a predictable PID path (#31).
 - Windows Desktop with a Linux `shell.exec` backend no longer fails with "Git for Windows Bash not found". The gateway shell is identified with `%OS%` expansion; a POSIX shell runs the command directly (#41).
 - `metricsOwner` is captured before the `save` callback is declared or called, so the original gateway/profile is kept if focus changes during session creation (#29, c65aaea, Refs #28).
