@@ -5,12 +5,12 @@ import { promisify } from 'node:util'
 import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fixtureBash } from '../scripts/test-helpers/shell_fixture.mjs'
 
 const execP = promisify(exec)
 const execFileP = promisify(execFile)
 const source = readFileSync(new URL('../desktop/plugin.js', import.meta.url), 'utf8')
-const bashBin = process.platform === 'win32' ? 'bash' : '/bin/bash'
-const DIR_NAME = /^(?:ghprs\.cmt|ghprs|ghfix|ghaggregate)\.[A-Za-z0-9]{6}$/
+const DIR_NAME = /^(?:ghprs\.input|ghprs|ghfix|ghaggregate)\.[A-Za-z0-9]{6}$/
 
 function sliceFn(mark) {
   const start = source.indexOf(mark)
@@ -34,15 +34,16 @@ function toPosix(p) {
 }
 
 function loadApi(host, posixShell) {
-  const transport = source.slice(source.indexOf('let bashPath = null'), source.indexOf('async function ghApiBig(')).replace(/^export /gm, '')
+  const transport = source.slice(source.indexOf('const shellContexts = new WeakMap()'), source.indexOf('async function ghApiBig(')).replace(/^export /gm, '')
   const collect = source.slice(source.indexOf('export async function collectFailingChecks'), source.indexOf('export function startFixChecks')).replace(/^export /gm, '')
   const collector = source.slice(source.indexOf('export const FIX_CHECK_COLLECTOR'), source.indexOf('export function reviewState')).replace(/^export /gm, '')
   const aggregate = source.slice(source.indexOf('let aggregateQueue = Promise.resolve()'), source.indexOf('export async function fetchAggregatePage'))
-  return new Function('host', 'POSIX_SHELL', 'sq', 'GH', `${transport}\n${collect}\n${collector}\n${aggregate}\nreturn { sh, shBig, postIssueComment, collectFailingChecks, runAggregateGraphql }`)(
+  return new Function('host', 'POSIX_SHELL', 'sq', 'GH', 'POSIX_PATH', `${transport}\n${collect}\n${collector}\n${aggregate}\nreturn { sh, shBig, postIssueComment, collectFailingChecks, runAggregateGraphql }`)(
     host,
     posixShell,
     value => `'${String(value).replace(/'/g, `'\\''`)}'`,
     'false',
+    'export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"; ',
   )
 }
 
@@ -57,7 +58,7 @@ function commandResult(result) {
 
 async function modeOf(posixPath) {
   const q = `'${posixPath.replace(/'/g, `'\\''`)}'`
-  const result = commandResult(await execFileP(bashBin, ['-c', `stat -c %a ${q} 2>/dev/null || stat -f %Lp ${q}`], { encoding: 'utf8' }).catch(error => error))
+  const result = commandResult(await execFileP(fixtureBash(), ['-c', `stat -c %a ${q} 2>/dev/null || stat -f %Lp ${q}`], { encoding: 'utf8' }).catch(error => error))
   assert.equal(result.code, 0, result.stderr)
   return result.stdout.trim()
 }
@@ -74,13 +75,13 @@ function makeHost(work, posixWork, seen, pending, kind) {
         shell: process.env.ComSpec,
         encoding: 'utf8',
         maxBuffer: 2 ** 20,
-        env: { ...process.env, TMPDIR: posixWork },
+        env: { ...process.env, TMPDIR: posixWork, MSYS_NO_PATHCONV: '1', MSYS2_ARG_CONV_EXCL: '*' },
       }).catch(error => error)
       pending.push(job)
       result = commandResult(await job)
     } else {
       const script = kind === 'runner' ? runnerScript(Buffer.from(command, 'utf8').toString('base64')) : command
-      const job = execFileP(bashBin, ['-c', script], {
+      const job = execFileP(fixtureBash(), ['-c', script], {
         encoding: 'utf8',
         maxBuffer: 2 ** 20,
         env: { ...process.env, TMPDIR: posixWork },
@@ -160,7 +161,7 @@ async function exercise(kind) {
 
 test('temp paths no longer use Date.now or Math.random', () => {
   const marks = [
-    'async function postIssueComment',
+    'async function withTextFile',
     'async function shBig',
     'export async function collectFailingChecks',
     'async function runAggregateGraphql',

@@ -28,4 +28,17 @@ All notable changes to GitHermes are documented in this file. Format based on [K
 - The plugin update check and update source (`PLUGIN_REPO` in `desktop/plugin.js`) now point to `CromeSDK-Plugins/githermes` instead of the upstream repository `claudiumio/githermes` (#32, 253655f, Refs #30).
 - Metadata correction: `plugin.yaml` `homepage` and `package.json` `homepage`/`repository` now point to `CromeSDK-Plugins/githermes` instead of `Crome696/githermes`, and `package.json` gains `bugs.url` (#32, 253655f, Refs #30).
 
+## [0.6.6] - 2026-10-18
+
+### Fixed
+- Detect the executing backend shell per gateway/profile and keep multi-call transfers on their original gateway across Desktop focus changes.
+- Send JSON bodies through stdin so native Windows gh works with disabled MSYS path conversion and long Unicode bodies.
+- Remove invalid `gh api --slurp --jq` combinations, preserve complete check responses and paginated review decisions, and keep pending Renovate requests intact.
+- Bind merge requests to the reviewed head and confirm the merged state before reporting success.
+- Preserve accepted or ambiguous issue creation across pane reloads and provide read-only verification without duplicate POSTs.
+- Persist bot-assignment handoffs, queue ownership and exact active Goal verification; route session links and metrics to their owning backend.
+- Keep completed older Fix history without blocking a new head after a prompt upgrade.
+- Replace unavailable plugin-tool instructions with backend-specific tool discovery, exact-head review API instructions, JSON-encoded untrusted data and explicit CI billing handling.
+- Run Windows shell tests from a normal PowerShell PATH without accidentally selecting WSL Bash.
+
 [Unreleased]: https://github.com/CromeSDK-Plugins/githermes/compare/v0.5.0...HEAD

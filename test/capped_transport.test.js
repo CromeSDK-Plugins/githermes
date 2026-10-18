@@ -11,8 +11,8 @@ const execP = promisify(exec)
 const source = readFileSync(new URL('../desktop/plugin.js', import.meta.url), 'utf8')
 // Run the shipped shellCommand/shBig/shJsonBig functions, not a second copy of
 // their algorithm. Adapt only the host RPC boundary (real local shell + 4k cap).
-const transportSource = source.slice(source.indexOf('let bashPath = null'), source.indexOf('async function ghApiBig(')).replace(/^export /gm, '')
-const makeTransport = new Function('host', 'POSIX_SHELL', 'sq', `${transportSource}; return { shBig, shJsonBig }`)
+const transportSource = source.slice(source.indexOf('const shellContexts = new WeakMap()'), source.indexOf('async function ghApiBig(')).replace(/^export /gm, '')
+const makeTransport = new Function('host', 'POSIX_PATH', 'sq', `${transportSource}; return { shBig, shJsonBig }`)
 const sq = value => "'" + String(value).replace(/'/g, "'\\''") + "'"
 
 test('shBig/shJsonBig survive the gateway cap through the real platform shell', async () => {
@@ -39,7 +39,7 @@ test('shBig/shJsonBig survive the gateway cap through the real platform shell', 
 
     return { code: typeof result.code === 'number' ? result.code : 0, stdout, stderr: result.stderr || '' }
   } }
-  const transport = makeTransport(host, process.platform !== 'win32', sq)
+  const transport = makeTransport(host, 'export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"; ', sq)
   const value = { title: 'SDK cap regression', body: 'ä😀 repeated text\n'.repeat(1500) }
   writeFileSync(join(root, 'payload.json'), JSON.stringify(value))
   try {

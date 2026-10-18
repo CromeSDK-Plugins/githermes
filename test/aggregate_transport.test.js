@@ -8,7 +8,7 @@ import {promisify} from 'node:util'
 import { relocateShellArtifacts } from '../scripts/test-helpers/shell_fixture.mjs'
 const execP=promisify(exec)
 const source=readFileSync(new URL('../desktop/plugin.js',import.meta.url),'utf8')
-const transport=source.slice(source.indexOf('let bashPath = null'),source.indexOf('async function ghApiBig(')).replace(/^export /gm,'')
+const transport=source.slice(source.indexOf('const shellContexts = new WeakMap()'),source.indexOf('async function ghApiBig(')).replace(/^export /gm,'')
 const aggregate=source.slice(source.indexOf('let aggregateQueue = Promise.resolve()'),source.indexOf('export async function fetchAggregatePage'))
 const sq=v=>"'"+String(v).replace(/'/g,"'\\''")+"'"
 test('combined GraphQL input/partial-error envelope crosses the real Windows shell and capped hex transport',async()=>{
@@ -28,7 +28,7 @@ test('combined GraphQL input/partial-error envelope crosses the real Windows she
   return {code:typeof r.code==='number'?r.code:0,stdout:(r.stdout||'').slice(-4000),stderr:r.stderr||''}
  }}
  const GH=`node ${sq(cli.replace(/\\/g,'/'))}`
- const run=new Function('host','POSIX_SHELL','sq','GH',`${transport};${aggregate};return runAggregateGraphql`)(host,process.platform!=='win32',sq,GH)
+ const run=new Function('host','POSIX_PATH','sq','GH',`${transport};${aggregate};return runAggregateGraphql`)(host,'export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"; ',sq,GH)
  const payload='ä😀 mixed JSON\n'.repeat(450)
  try{
   const result=await run({query:'query($payload:String!){viewer{login}}',variables:{payload}})

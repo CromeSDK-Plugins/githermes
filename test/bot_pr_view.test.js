@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import * as plugin from '../desktop/plugin.js'
 const { dependencyBotPr, parseDependencyTitle, groupDependencyPrs, requestDependencyBotRebase } = plugin
+const commits = date => JSON.stringify([[{ commit: { committer: { date } } }]])
 
 const pr = (overrides = {}) => ({
   repo: 'owner/repo', number: 1, title: 'Update dependency @angular/router from 22.1.0 to 22.2.0',
@@ -72,8 +73,8 @@ test('conflict handling requests a bot rebase, never a local rebase, and dedupli
   let comments = []
   const run = async command => {
     calls.push(command)
-    if (command.includes('pulls/1/commits')) return '2025-12-31T00:00:00Z'
-    if (command.includes('--paginate')) return JSON.stringify(comments)
+    if (command.includes('pulls/1/commits')) return commits('2025-12-31T00:00:00Z')
+    if (command.includes('--paginate')) return JSON.stringify([comments])
     if (command.includes('--method POST')) { comments = [{ body: '@dependabot rebase', created_at: '2026-01-01T00:00:00Z' }]; return '{}' }
     throw new Error('unexpected command')
   }
@@ -91,37 +92,35 @@ test('Renovate rebase checks the PR body checkbox without posting a comment', as
   let body = '## Update\n- [ ] <!-- rebase-check -->'
   const run = async command => {
     calls.push(command)
-    if (command.includes('--method PATCH')) { body = body.replace('- [ ] <!-- rebase-check -->', '- [x] <!-- rebase-check -->'); return '{}' }
-    if (command.includes('pulls/1/commits')) return '2025-12-31T00:00:00Z'
+    if (command.includes('pulls/1/commits')) return commits('2025-12-31T00:00:00Z')
     if (command.includes('pulls/1')) return JSON.stringify({ body, updated_at: '2026-01-01T00:00:00Z' })
     throw new Error(`unexpected command: ${command}`)
   }
-  const result = await requestDependencyBotRebase(pr(), run)
+  const result = await requestDependencyBotRebase(pr(), run, async (endpoint, data) => {
+    calls.push(`PATCH ${endpoint}`)
+    assert.equal(endpoint, 'repos/owner/repo/pulls/1')
+    body = data.body
+  })
   assert.deepEqual(result, { status: 'requested', command: 'PR body rebase checkbox' })
-  assert.ok(calls.some(command => command.includes('--method PATCH')))
+  assert.ok(calls.some(command => command.startsWith('PATCH ')))
   assert.ok(calls.every(command => !command.includes('--method POST') && !command.includes('@renovate')))
   assert.match(body, /- \[x\] <!-- rebase-check -->/)
 })
 
-test('a checked Renovate box predating the latest head push is toggled to issue a new request', async () => {
+test('a checked Renovate box remains an outstanding request without invented timeline edit data', async () => {
   const calls = []
   let body = '## Update\n- [x] <!-- rebase-check -->'
   let patches = 0
   const run = async command => {
     calls.push(command)
-    if (command.includes('pulls/1/commits')) return '2025-12-31T00:00:00Z'
-    if (command.includes('/timeline')) return JSON.stringify([{ created_at: '2025-12-30T00:00:00Z', previous_body: '## Update\n- [ ] <!-- rebase-check -->' }])
-    if (command.includes('--method PATCH')) {
-      patches++
-      body = patches === 1 ? body.replace('- [x]', '- [ ]') : body.replace('- [ ]', '- [x]')
-      return '{}'
-    }
+    if (command.includes('pulls/1/commits')) return commits('2025-12-31T00:00:00Z')
     if (command.includes('pulls/1')) return JSON.stringify({ body })
     throw new Error(`unexpected command: ${command}`)
   }
-  const result = await requestDependencyBotRebase(pr(), run)
-  assert.deepEqual(result, { status: 'requested', command: 'PR body rebase checkbox' })
-  assert.equal(patches, 2)
+  const result = await requestDependencyBotRebase(pr(), run, async () => { patches++ })
+  assert.deepEqual(result, { status: 'already-requested', command: 'PR body rebase checkbox' })
+  assert.equal(patches, 0)
+  assert.ok(calls.every(command => !command.includes('/timeline')))
   assert.match(body, /- \[x\] <!-- rebase-check -->/)
 })
 
@@ -130,12 +129,24 @@ test('an existing rebase request is stale when it predates the latest head commi
   let comments = [{ body: '@dependabot rebase', created_at: '2025-12-30T00:00:00Z' }]
   const run = async command => {
     calls.push(command)
-    if (command.includes('pulls/1/commits')) return '2025-12-31T00:00:00Z'
-    if (command.includes('--paginate')) return JSON.stringify(comments)
+    if (command.includes('pulls/1/commits')) return commits('2025-12-31T00:00:00Z')
+    if (command.includes('--paginate')) return JSON.stringify([comments])
     if (command.includes('--method POST')) { comments = [{ body: '@dependabot rebase', created_at: '2026-01-01T00:00:00Z' }]; return '{}' }
     throw new Error(`unexpected command: ${command}`)
   }
   const result = await requestDependencyBotRebase(pr({ author: { login: 'dependabot[bot]' }, headRefName: 'dependabot/update' }), run)
   assert.equal(result.status, 'requested')
   assert.ok(calls.some(command => command.includes('--method POST')))
+})
+
+test('malformed pagination prevents a dependency bot mutation', async () => {
+  const item = pr({ author: { login: 'dependabot[bot]' }, headRefName: 'dependabot/update' })
+  for (const response of [{ message: 'not pages' }, [null], [[{ unexpected: true }]]]) {
+    const calls = []
+    await assert.rejects(requestDependencyBotRebase(item, async command => {
+      calls.push(command)
+      return JSON.stringify(response)
+    }))
+    assert.ok(calls.every(command => !command.includes('--method POST')))
+  }
 })

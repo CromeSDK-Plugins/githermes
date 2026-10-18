@@ -56,11 +56,14 @@ test('captured gateway is independent from a focus change; restart uses persiste
   await f.controller.refresh(); assert.equal(f.controller.records[0].tokens.input, 1000)
   f.controller.dispose()
   const routed = [], released = []
-  f.api.requestProfile = async (route, method, params) => { routed.push(route); return f.api.request(method, params) }
+  f.api.requestProfile = async (route, method, params) => {
+    assert.ok(route.connectionId.trim() && route.profile.trim() && route.targetProfile.trim(), 'current SDK route requires all three identities')
+    routed.push(route); return f.api.request(method, params)
+  }
   f.api.retainProfileSocket = route => () => released.push(route)
   const fresh = createMetricsController(f.api, f.storage, f.options)
   await fresh.refresh()
-  assert.ok(routed.length); assert.ok(routed.every(r => r.profile === 'default' && r.connectionId === 'local'))
+  assert.ok(routed.length); assert.ok(routed.every(r => r.profile === 'default' && r.connectionId === 'local' && r.targetProfile === 'worker'))
   fresh.dispose(); assert.equal(released.length, 1)
 })
 test('storage failure is surfaced, cannot overwrite last durable metric, and does not break handoff', async () => {
@@ -133,6 +136,7 @@ test('real Issue/PR/Fix start hooks persist accounting metadata without addition
       if (method === 'model.options') return { model: 'm', provider: 'p', providers: [{ slug: 'p', models: ['m'] }] }
       if (method === 'session.create') { f.focus('other'); return { session_id: 'runtime', stored_session_id: 'stored', info: { model: 'm', provider: 'p', reasoning_effort: 'high', fast: false } } }
       if (method === 'session.title' || method === 'prompt.submit') return {}
+      if (method === 'session.control.read') return { control: { goal: prompt ? { title: prompt, status: 'active' } : null } }
       if (method === 'command.dispatch') return p.arg === 'show' ? { type: 'exec', output: `Goal (active): ${prompt}` } : (prompt = plugin.queueGoalObjective({ prompt: p.arg.slice(3) }), { type: 'send', message: prompt })
       throw Error(method)
     }

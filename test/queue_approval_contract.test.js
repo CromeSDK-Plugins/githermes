@@ -82,6 +82,7 @@ function transport() {
   calls.push([method, args])
   if (method === 'session.create') return { session_id: 'runtime', stored_session_id: 'stored' }
   if (method === 'session.title') return {}
+  if (method === 'session.control.read') return { control: { goal: objective ? { title: objective, status: 'active' } : null } }
   if (method === 'command.dispatch' && args.arg.startsWith('-- ')) { objective = p.queueGoalObjective({ prompt: args.arg.slice(3) }); return { type: 'send', message: objective } }
   if (method === 'command.dispatch' && args.arg === 'show') return { type: 'exec', output: `Goal (active): ${objective}` }
   if (method === 'prompt.submit') return { status: 'ok' }

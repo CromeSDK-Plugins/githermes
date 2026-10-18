@@ -6,8 +6,8 @@ import { promisify } from 'node:util'
 
 const execP = promisify(exec)
 const source = readFileSync(process.env.GITHERMES_BASELINE || new URL('../desktop/plugin.js', import.meta.url), 'utf8')
-const transportSource = source.slice(source.indexOf('let bashPath = null'), source.indexOf('async function postIssueComment'))
-const makeTransport = new Function('host', 'POSIX_SHELL', `${transportSource}; return { sh, shellCommand }`)
+const transportSource = source.slice(source.indexOf('const shellContexts = new WeakMap()'), source.indexOf('async function postIssueComment'))
+const makeTransport = new Function('host', 'POSIX_SHELL', 'POSIX_PATH', `${transportSource}; return { sh, shellCommand }`)
 
 test('real Windows cmd discovers standard Git Bash with git absent from PATH', { skip: process.platform !== 'win32' }, async t => {
   // No repositories, installs or host config changes. Only this child env loses
@@ -26,7 +26,7 @@ test('real Windows cmd discovers standard Git Bash with git absent from PATH', {
   } }
   const before = await host.request('shell.exec', { command: 'where git' })
   assert.notEqual(before.code, 0, 'fixture must remove git from PATH')
-  const transport = makeTransport(host, false)
+  const transport = makeTransport(host, false, 'export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"; ')
   assert.equal(await transport.sh('printf windows-standard-path-smoke'), 'windows-standard-path-smoke')
   assert.ok(calls.some(c => c.includes('%ProgramFiles%')))
   assert.ok(calls.some(c => c.includes('uname -s')))
