@@ -4,6 +4,12 @@ All notable changes to GitHermes are documented in this file. Format based on [K
 
 ## [Unreleased]
 
+### Fixed
+- Replaced foreign repository ownership in test fixtures with neutral example identifiers and added a regression guard for the desktop plugin source (#37).
+
+### Changed
+- Bumped the package version to 0.6.5 for the repository test-fixture cleanup (#37).
+
 ### Added
 - Repo guard tests: `test/repo_guard.test.js` fails if `desktop/plugin.js` contains foreign repository identifiers (`claudiumio`, `claudioorjunior`, `Crome696/`); `sdk_compatibility` requires every `compare` target in `desktop/plugin.js` to use `PLUGIN_REPO` and every literal `repos/<owner>/<repo>/compare` and `https://github.com/<owner>/…` in `desktop/plugin.js` to use the owner `CromeSDK-Plugins` (owner guard, 3adbc50), and asserts the new homepage/repository/bugs URLs and that no manifest contains `Crome696/githermes` (#32, 253655f, Refs #30).
 

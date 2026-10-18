@@ -888,13 +888,13 @@ test('parseBehindCount: numeric output is truth, anything else is not behind', (
 
 test('parseCatalogPin: only our own entry with a full SHA counts', () => {
   const sha = '09d5b566da650290dc0d639ea1e77def4bcdab31'
-  const good = { results: [{ name: 'githermes', repo: 'https://github.com/claudioorjunior/githermes', sha }] }
-  assert.equal(parseCatalogPin(good, 'claudioorjunior/githermes'), sha)
+  const good = { results: [{ name: 'githermes', repo: 'https://github.com/example-owner/example-repo', sha }] }
+  assert.equal(parseCatalogPin(good, 'example-owner/example-repo'), sha)
   // Wrong repo, short SHA, missing shape: all fall back to the main compare.
-  assert.equal(parseCatalogPin({ results: [{ name: 'githermes', repo: 'https://github.com/evil/fork', sha }] }, 'claudioorjunior/githermes'), null)
-  assert.equal(parseCatalogPin({ results: [{ name: 'githermes', repo: 'https://github.com/claudioorjunior/githermes', sha: '09d5b56' }] }, 'claudioorjunior/githermes'), null)
-  assert.equal(parseCatalogPin({ results: [] }, 'claudioorjunior/githermes'), null)
-  assert.equal(parseCatalogPin(null, 'claudioorjunior/githermes'), null)
+  assert.equal(parseCatalogPin({ results: [{ name: 'githermes', repo: 'https://github.com/evil/fork', sha }] }, 'example-owner/example-repo'), null)
+  assert.equal(parseCatalogPin({ results: [{ name: 'githermes', repo: 'https://github.com/example-owner/example-repo', sha: '09d5b56' }] }, 'example-owner/example-repo'), null)
+  assert.equal(parseCatalogPin({ results: [] }, 'example-owner/example-repo'), null)
+  assert.equal(parseCatalogPin(null, 'example-owner/example-repo'), null)
 })
 
 test('resolvePinBehind: rollback is not "up to date"', () => {

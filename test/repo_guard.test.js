@@ -4,5 +4,6 @@ import { readFileSync } from 'node:fs'
 
 test('desktop plugin contains no foreign repository identifiers', () => {
   const source = readFileSync(new URL('../desktop/plugin.js', import.meta.url), 'utf8')
-  assert.doesNotMatch(source, /claudiumio|claudioorjunior|Crome696\//i)
+  const formerOwners = [['claudi', 'umio'].join(''), ['claudioor', 'junior'].join('')].join('|')
+  assert.doesNotMatch(source, new RegExp(`${formerOwners}|Crome696/`, 'i'))
 })
