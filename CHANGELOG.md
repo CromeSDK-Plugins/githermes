@@ -28,6 +28,13 @@ All notable changes to GitHermes are documented in this file. Format based on [K
 - The plugin update check and update source (`PLUGIN_REPO` in `desktop/plugin.js`) now point to `CromeSDK-Plugins/githermes` instead of the upstream repository `claudiumio/githermes` (#32, 253655f, Refs #30).
 - Metadata correction: `plugin.yaml` `homepage` and `package.json` `homepage`/`repository` now point to `CromeSDK-Plugins/githermes` instead of `Crome696/githermes`, and `package.json` gains `bugs.url` (#32, 253655f, Refs #30).
 
+## [0.7.0] - 2026-10-18
+
+### Changed
+- Replace conflicting Stop/Skip and blocker instructions with autonomous recovery for ordinary patch, tool, build and test failures. Only genuine decisions, access failures or unresolved obstacles require user input.
+- Remove the error selector and clarify the remaining workflow controls. Older draft selections and permissions migrate without rewriting active Goals.
+- Shorten Issue and PR queue prompts while preserving action scope, native security boundaries, required reviews/checks, exact-head merges and mutation readback.
+
 ## [0.6.6] - 2026-10-18
 
 ### Fixed

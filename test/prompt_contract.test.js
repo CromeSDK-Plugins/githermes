@@ -55,8 +55,8 @@ test('billing prevents a CI verdict but does not prevent all other validation or
     assert.match(plan.prompt, /Required Check sperrt den Merge/)
     assert.match(plan.prompt, /kein --admin/)
   }
-  assert.equal(p.emptyGlobalIssueQueue().options.onError, 'stop')
-  assert.equal(p.emptyGlobalPrQueue().options.onError, 'stop')
+  assert.equal(Object.hasOwn(p.emptyGlobalIssueQueue().options,'onError'), false)
+  assert.equal(Object.hasOwn(p.emptyGlobalPrQueue().options,'onError'), false)
 })
 
 test('check names remain JSON evidence and cannot insert new instruction or native Goal field lines', () => {

@@ -65,7 +65,9 @@ test('selection changes fingerprints for Issues, Review and Merge without losing
   for(const options of [{model:p.queueModelKey('openai-codex','gpt-5.5')},{reasoning:'low'},{fast:'on'}]) {
    const d=update(f.draft,{type:'options',options})
    const plan=kind==='pr'?p.buildPrQueueGoalPlan(d):p.buildQueueGoalPlan(d)
-   assert.notEqual(JSON.stringify(plan),JSON.stringify(f.plan));assert.match(plan.prompt,/Session-Einstellungen/)
+   assert.notEqual(JSON.stringify(plan),JSON.stringify(f.plan))
+   assert.deepEqual(plan.execution,p.queueExecutionOptions(d.options))
+   assert.equal(plan.prompt,f.plan.prompt, 'native model settings must not become agent instructions')
   }
  }
 })

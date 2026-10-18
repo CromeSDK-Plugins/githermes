@@ -79,7 +79,7 @@ test('cross-repo prompt never supplies a misleading cwd; merge consent applies o
  assert.match(f.plan.prompt, /Nicht mergen/)
  assert.match(f.plan.prompt, /2\. github\/sdk#42/)
  const opted = plugin.updateGlobalIssueQueue(f.draft, { type: 'options', options: { autoMerge: true, strategy: 'rebase' } })
- assert.match(plugin.buildQueueGoalPlan(opted).prompt, /Opt-in nur für diese Queue: Merge-Strategie rebase/)
+ assert.match(plugin.buildQueueGoalPlan(opted).prompt, /Merge ist für die ausgewählten Issues vorab erlaubt, Strategie rebase/)
  assert.equal(plugin.restoreGlobalIssueQueue(opted).options.autoMerge, false)
 })
 test('Issue and PR queue prompts leave checkout discovery to Hermes without hard-coded paths', () => {
@@ -92,14 +92,14 @@ test('Issue and PR queue prompts leave checkout discovery to Hermes without hard
  const issueWithoutCwd = plugin.buildQueueGoalPlan(issueDraft).prompt
  const prPrompt = plugin.buildPrQueueGoalPlan(prDraft).prompt
  for (const prompt of [issuePrompt, issueWithoutCwd, prPrompt]) assert.doesNotMatch(prompt, /C:\\Users\\|C:\/Users\/|allowlist/i)
- assert.match(issuePrompt, /Bekannter passender Einzelrepo-Checkout: "\/tmp\/app"/)
- assert.match(issueWithoutCwd, /Hermes ermittelt den passenden Checkout selbst/)
- assert.match(prPrompt, /Hermes entscheidet selbst, wo passende Checkouts und Worktrees gesucht oder angelegt werden/)
- assert.match(issuePrompt, /Vor jeder Änderung Repository und Remote prüfen/)
- assert.match(issuePrompt, /niemals behaupten, ein gemeinsames cwd sei der Checkout aller Repos/)
- assert.match(issueParallel, /separat verifizierten Checkout oder isolierten Worktree/)
- assert.match(prPrompt, /Vor jeder Mutation Repository und Remote prüfen/)
- assert.match(prPrompt, /Kein gemeinsames cwd für fremde Repos behaupten/)
+ assert.match(issuePrompt, /Checkout-Hinweis.*"\/tmp\/app"/)
+ assert.match(issueWithoutCwd, /Passende Checkouts auf dem Backend selbst ermitteln/)
+ assert.match(prPrompt, /Checkouts pro Repository selbst ermitteln oder isoliert anlegen/)
+ assert.match(issuePrompt, /Repository-Remote/)
+ assert.match(issuePrompt, /Checkouts pro Repository/)
+ assert.match(issueParallel, /getrennten Checkouts\/Worktrees/)
+ assert.match(prPrompt, /Repository-Remote/)
+ assert.match(prPrompt, /Checkouts pro Repository/)
 })
 test('migration retains the existing 27/26/25 selection and all valid legacy drafts without mutating originals', () => {
  const old = {}
