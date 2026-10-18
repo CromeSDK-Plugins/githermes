@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {readFileSync,writeFileSync,mkdtempSync,mkdirSync,rmSync,readdirSync} from 'node:fs'
+import {readFileSync,writeFileSync,mkdtempSync,mkdirSync,rmSync,readdirSync,statSync} from 'node:fs'
 import {join,resolve} from 'node:path'
 import {exec} from 'node:child_process'
 import {promisify} from 'node:util'
@@ -34,11 +34,14 @@ subprocess.run=run
   assert.equal(method,'shell.exec')
   const encoded=command.match(/echo ([A-Za-z0-9+/=]+) \| tr/)
   if(encoded){const raw=relocateShellArtifacts(Buffer.from(encoded[1],'base64').toString(),posix);command=relocateShellArtifacts(command.replace(encoded[1],Buffer.from(raw).toString('base64')),posix)}else command=relocateShellArtifacts(command,posix)
-  const env={...process.env,PYTHONPATH:root};for(const key of Object.keys(env))if(/API_KEY|TOKEN|SECRET|PASSWORD/.test(key))delete env[key]
+  const env={...process.env,PYTHONPATH:root,TMPDIR:posix};for(const key of Object.keys(env))if(/API_KEY|TOKEN|SECRET|PASSWORD/.test(key))delete env[key]
   const job=execP(command,{shell:process.platform==='win32'?process.env.ComSpec:'/bin/bash',env,maxBuffer:2**20}).catch(e=>e);jobs.push(job)
   const r=await job;if(r instanceof Error&&typeof r.code!=='number')throw r
   if((r.stdout||'').length===3800)chunks++
-  for(const name of readdirSync(root).filter(n=>/\.raw$|\.hex$/.test(n)))carriers.push(readFileSync(join(root,name),'utf8'))
+  const files=[]
+  const walk=dir=>{for(const name of readdirSync(dir)){const path=join(dir,name);if(statSync(path).isDirectory())walk(path);else files.push(path)}}
+  walk(root)
+  for(const path of files.filter(n=>/\.raw$|\.hex$/.test(n)))carriers.push(readFileSync(path,'utf8'))
   return {code:typeof r.code==='number'?r.code:0,stdout:(r.stdout||'').slice(-4000),stderr:r.stderr||''}
  }
  try{

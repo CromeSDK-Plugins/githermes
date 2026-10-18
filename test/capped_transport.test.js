@@ -29,7 +29,7 @@ test('shBig/shJsonBig survive the gateway cap through the real platform shell', 
       const decoded = relocateShellArtifacts(Buffer.from(match[1], 'base64').toString('utf8'), posixRoot)
       command = relocateShellArtifacts(command.replace(match[1], Buffer.from(decoded).toString('base64')), posixRoot)
     } else command = relocateShellArtifacts(command, posixRoot)
-    const running = execP(command, { shell: process.platform === 'win32' ? process.env.ComSpec : '/bin/bash', encoding: 'utf8', maxBuffer: 2 ** 20 }).catch(error => error)
+    const running = execP(command, { shell: process.platform === 'win32' ? process.env.ComSpec : '/bin/bash', encoding: 'utf8', maxBuffer: 2 ** 20, env: { ...process.env, TMPDIR: posixRoot } }).catch(error => error)
     cleanups.push(running)
     const result = await running
     if (result instanceof Error && typeof result.code !== 'number') throw result
