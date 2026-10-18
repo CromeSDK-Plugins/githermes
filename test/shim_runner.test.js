@@ -22,7 +22,8 @@ function runnerScript(source, b64) {
 
 test('shell: runner uses mktemp and removes the script on success and failure', { skip: process.platform === 'win32' }, async () => {
   const source = readFileSync(new URL('../desktop/plugin.js', import.meta.url), 'utf8')
-  assert.equal(source.includes('gt$$'), false, 'predictable gt$$ temp names must not remain')
+  const pidName = `gt${'$'.repeat(2)}`
+  assert.equal(source.includes(pidName), false, 'predictable PID temp names must not remain')
   const probed = runnerScript(source, 'QQ')
   assert.match(probed, /mktemp \$\{TMPDIR:-\/tmp\}\/gt\.XXXXXX/, 'temp scripts must be created with mktemp')
   assert.match(probed, /trap 'unlink \$f 2>\/dev\/null \|\| true' EXIT INT TERM/, 'cleanup must survive errors via an unlink trap')

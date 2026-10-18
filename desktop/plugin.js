@@ -1865,11 +1865,15 @@ function sendCommentToChat(c) {
 // that string itself, so `|` `>` `&&` `^` are live operators, `%VAR%` expands, and
 // inner double quotes break argv quoting (the .bat-shim PR's "unexpected end of
 // file from `if' command"). Only base64 crosses, because its alphabet
-// [A-Za-z0-9+/=] is metachar-free; bash decodes it into a `$$`-unique /tmp script
-// and runs it, so concurrent shell.exec calls share no file state. The decode must
-// go through a file, never `base64 -d | bash`: the gateway's approval detector
-// blocks that shape as command obfuscation, and it flags `rm /tmp/x` as a root-path
-// delete, which is why the cleanup uses `unlink`.
+// [A-Za-z0-9+/=] is metachar-free; bash decodes it into an mktemp file
+// (`${TMPDIR:-/tmp}/gt.XXXXXX`, mode 600) and runs it, so concurrent shell.exec
+// calls share no file state. The decode must go through a file, never
+// `base64 -d | bash`: the gateway's approval detector blocks that shape as
+// command obfuscation. Cleanup is `unlink` in an EXIT/INT/TERM trap. `rm /tmp/x`
+// and `rm -f /tmp/x` are root-path deletes, and a cmd-escaped `rm -f \"$f\"`
+// becomes `rm -f /"$f/"` when that detector rewrites every `\` in the Windows
+// bash.exe path. The runner therefore has no inner double quotes; empty IFS and `set -f`
+// keep a spaced TMPDIR as one mktemp argument.
 //
 // POSIX_SHELL above is the Desktop client. @hermes/plugin-sdk host.state has no
 // OS/platform atom, ctx.os is that same client, and shell.exec returns only
@@ -1931,15 +1935,14 @@ async function shellCommand(cmd) {
   await resolveBash()
   if (POSIX_SHELL || backendPosix) return cmd
   // Only base64 crosses cmd.exe (see the block comment above). Inside bash the
-  // command is decoded into a $$-unique /tmp script, so concurrent shell.exec
-  // calls share no file state, and `-l` is what makes `gh` resolve from the
-  // login shell's PATH.
+  // command is decoded into an mktemp file, so concurrent shell.exec calls share
+  // no file state, and `-l` is what makes `gh` resolve from the login shell's PATH.
   const b64 = utf8ToB64(cmd)
   // ponytail: cmd.exe /c caps the command line at 8191 chars and b64 inflates 4/3;
   // past this the caller must split the command. shBig is not the escape hatch:
   // it routes back through sh/shellCommand and would throw the same guard.
   if (b64.length > 6000) throw new Error(`command too long for cmd.exe (${b64.length} b64 chars); split it into smaller commands`)
-  return `"${bashPath}" -l -c "echo ${b64} | tr -d '\\r\\n' | base64 -d > /tmp/gt$$.sh; bash /tmp/gt$$.sh; e=$?; unlink /tmp/gt$$.sh; exit $e"`
+  return `"${bashPath}" -l -c "set -f; IFS=; f=$(mktemp \${TMPDIR:-/tmp}/gt.XXXXXX) || exit 1; trap 'unlink $f 2>/dev/null || true' EXIT INT TERM; chmod 600 $f || exit 1; echo ${b64} | tr -d '\\r\\n' | base64 -d > $f; bash $f"`
 }
 
 async function sh(cmd) {

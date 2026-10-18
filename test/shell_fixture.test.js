@@ -12,7 +12,7 @@ test('shell fixture relocation preserves Ubuntu payload and CLI paths already un
 test('shell fixture relocation leaves mktemp runner paths alone and moves transport cleanup', () => {
   const root = '/c/Users/runner/fixture'
   const command = 'set -f; IFS=; f=$(mktemp ${TMPDIR:-/tmp}/gt.XXXXXX) || exit 1; trap \'unlink $f\' EXIT INT TERM; base64 -d > $f; bash $f; unlink \'/tmp/ghprs.sample.hex\''
-  assert.equal(command.includes('gt$$'), false)
+  assert.equal(command.includes(`gt${'$'.repeat(2)}`), false)
   assert.equal(relocateShellArtifacts(command, root),
     'set -f; IFS=; f=$(mktemp ${TMPDIR:-/tmp}/gt.XXXXXX) || exit 1; trap \'unlink $f\' EXIT INT TERM; base64 -d > $f; bash $f; unlink \'' + root + '/ghprs.sample.hex\'')
 })
