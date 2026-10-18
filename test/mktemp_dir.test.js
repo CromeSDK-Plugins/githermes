@@ -67,6 +67,7 @@ function makeHost(work, posixWork, seen, pending, kind) {
     assert.equal(method, 'shell.exec')
     assert.doesNotMatch(command, /Date\.now\(\)|Math\.random|rm -rf|base64 -d \| bash/)
     assert.doesNotMatch(command, /(^|[;&|]\s*)rm\s/, 'cleanup must not be rm')
+    if (command.includes('mktemp -d')) assert.match(command, /chmod 700/)
     let result
     if (kind === 'cmd') {
       const job = execP(command, {
@@ -125,7 +126,9 @@ async function exercise(kind) {
     const created = seen.slice(before)
     assert.ok(created.length > 0, `${label} did not create a temp directory in TMPDIR`)
     for (const dir of created) {
-      assert.equal(dir.mode, '700', `${label} mode ${dir.mode} for ${dir.name}`)
+      // Git Bash on NTFS still runs chmod 700, then stat reports 755: the mount
+      // synthesizes directory +x. Linux and macOS keep the real 700 mode.
+      assert.match(dir.mode, process.platform === 'win32' ? /^(700|755)$/ : /^700$/, `${label} mode ${dir.mode} for ${dir.name}`)
       assert.match(dir.name, DIR_NAME, `${label} predictable name ${dir.name}`)
       assert.ok(dir.posix.startsWith(`${posixWork}/`), `${label} ignored TMPDIR: ${dir.posix}`)
     }
